@@ -21,7 +21,7 @@
 
 ---
 
-## Task 1: Project skeleton + uv + test infrastructure
+## Task 1: Project skeleton + uv + test infrastructure (commit `79bd723`)
 
 **Files:**
 - Create: `pyproject.toml`
@@ -3186,7 +3186,7 @@ git commit -m "docs: log Phase 4 implementation + tick plan checkboxes"
 
 ## Task Tracker
 
-- [ ] Task 1: Project skeleton + uv + test infrastructure
+- [x] Task 1: Project skeleton + uv + test infrastructure (commit `79bd723`)
 - [ ] Task 2: Config — Pydantic + TOML loading
 - [ ] Task 3: Tools — ToolResult + REGISTRY + path sandbox
 - [ ] Task 4: read_file
