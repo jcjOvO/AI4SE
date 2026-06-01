@@ -29,6 +29,7 @@
 | 15 | 2026-06-01 | Phase 4 实现 Task 12 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 12：TUI skeleton 1 个测试（starts_and_shows_header_and_input）+ AgentApp 骨架 + Header/Log/Input/Status 4 个 widget + focus Input + 显示 session_id[:8]（commit 见 #15 详情） |
 | 16 | 2026-06-01 | Phase 4 实现 Task 13 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 13：TUI wire input 1 个测试（user_input_triggers_agent_run）+ RichLog 替换 VerticalScroll + `on_input_submitted` + `_run_agent` 后台 task + `_render_event` 5 事件类型 + `_set_status` + /exit /reset 命令（commit 见 #16 详情） |
 | 17 | 2026-06-01 | Phase 4 实现 Task 14 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 14：CLI 2 个测试（parse_args_defaults/parse_args_resume）+ argparse 4 选项 + module wiring（config/llm/session/tui）+ smoke `uv run miniagent --help`（commit 见 #17 详情） |
+| 18 | 2026-06-01 | Phase 4 实现 Task 15 | — | 主 agent 直接执行 Task 15：Dockerfile（python:3.12-slim 多阶段 + uv 安装 + non-root user）+ docker-compose.yml（4 env vars + volume mount + tty/stdin_open）。跳过 Step 3/4 (docker build/run)，环境无 Docker daemon——属 Phase 6 验证项。 |
 
 ---
 
