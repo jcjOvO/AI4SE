@@ -572,7 +572,7 @@ git commit -m "feat(tools): ToolResult, REGISTRY, path sandbox helper"
 
 ---
 
-## Task 4: `read_file` tool (TDD)
+## Task 4: `read_file` tool (TDD) (commit `10e2d94`)
 
 **Files:**
 - Modify: `src/miniagent/tools.py`
@@ -3189,7 +3189,7 @@ git commit -m "docs: log Phase 4 implementation + tick plan checkboxes"
 - [x] Task 1: Project skeleton + uv + test infrastructure (commit `79bd723`)
 - [x] Task 2: Config — Pydantic + TOML loading
 - [x] Task 3: Tools — ToolResult + REGISTRY + path sandbox (commit `a33a699`)
-- [ ] Task 4: read_file
+- [x] Task 4: read_file
 - [ ] Task 5: write_file
 - [ ] Task 6: edit_file
 - [ ] Task 7: bash + path-escape detection
