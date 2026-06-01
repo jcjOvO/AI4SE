@@ -25,6 +25,7 @@
 | 11 | 2026-06-01 | Phase 4 实现 Task 8b | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 8b：AsyncSessionStore 2 个测试（does_not_block/close_drains_queue）+ 队列 + 后台 flusher 任务 + `close()` 阻塞 drain（commit 见 #11 详情） |
 | 12 | 2026-06-01 | Phase 4 实现 Task 9 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 9：LLMClient skeleton 2 个测试（text_and_tool_calls/passes_messages_and_model）+ `AuthError` / `ContextOverflowError` / `RetryExhaustedError` / `ToolCall` + `LLMClient` SSE 流式累积（commit 见 #12 详情） |
 | 13 | 2026-06-01 | Phase 4 实现 Task 10 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 10：LLMClient retry 3 个测试（retries_on_429/no_retry_on_401/retry_exhausted_after_4_attempts）+ `_RetriableError` 内部异常 + `_RETRIABLE_STATUS` 集合 + `_MAX_RETRIES=3` + 指数退避 + `RetryExhaustedError` 包装（commit 见 #13 详情） |
+| 14 | 2026-06-01 | Phase 4 实现 Task 11 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 11：Agent 4 个测试（emits_assistant_delta_and_end_turn/executes_tool_and_reflows_result/reflows_tool_error_back_to_llm/propagates_cancellation）+ 5 个 Event dataclass + 3 个 Protocol + `_to_assistant_message` / `_to_tool_result_message` + `run()` 循环 + session hook + AgentError + CancelledError 透传（commit 见 #14 详情） |
 
 ---
 
@@ -397,6 +398,40 @@
   - **"`except _RetriableError` + `raise RetryExhaustedError` from last_exc" 是标准 retry 模式**——`from last_exc` 保留 cause chain（`__cause__`），让 reviewer 可以 trace 到"是哪个 _RetriableError 触发的 exhausted"。**教训**：Python exception chaining 是"未明示但默认期望"的写法，subagent 不要写 `raise RetryExhaustedError(...)` 而漏 `from`——会失去 cause**。
   - **"test_no_retry_on_401" 第一次就碰巧通过是 RED 阶段的"软信号"**——本次 3 个新测试，1 个直接 pass（401 → AuthError 在 skeleton 已存在），2 个 fail（retry 缺失）。pytest 的"2 failed, 1 passed" 报告比"3 failed" 更精确——告诉 subagent "1 个 OK，2 个需要实现"，节省阅读时间。**教训：TDD 的 RED 阶段不一定要"全红"——只要新增能力（retry）的测试红了，RED 就触发**。本次 "1 passed" 是"401 不重试这条 spec 已经实现" 的正向信号。
   - **retry 测试用 `route.call_count` 而不是 timing**——`test_retries_on_429_then_succeeds` 断言 `route.call_count == 3`（2 retry + 1 success），不依赖 backoff 时长。**这是测试设计的"时间无关性"——backoff 改成 0.01 还是 1.0 都不影响 test 行为**。**教训：retry 测试断言"调用了几次"而不是"等了多久"——这与"测试要快"目标正交但都成立**。
+
+---
+
+## #14 — 2026-06-01 — Phase 4：实现 Task 11（Agent loop，Event-driven run()，TDD）
+
+- **任务**：按 PLAN Task 11 严格 TDD 实现 Agent 模块。文件：`src/miniagent/agent.py`（新文件，含 5 个 Event dataclass + 3 个 Protocol + `_to_assistant_message` / `_to_tool_result_message` helper + `run()` 主循环）+ `tests/unit/test_agent.py`（新文件，4 个测试 + 2 个 Fake dataclass 模拟 LLM/Tools 协议）。4 个测试覆盖：(1) text-only response → `AssistantDelta` + `EndTurn` 事件序列；(2) tool call + result reflow → 5 个事件序列；(3) tool error → `ToolCallResult.ok=False` 并 reflow 给 LLM；(4) Ctrl+C → `CancelledError` 透传，不发 `AgentError`。
+- **触发的 Superpowers 技能**：
+  - `superpowers:test-driven-development`（red→green→refactor，1 轮修复）
+  - `superpowers:subagent-driven-development`（主 agent 直接执行）
+  - `superpowers:systematic-debugging`（诊断 mypy 6 个 `dict`/`list` 类型错 + ruff 2 个 F841 未用变量）
+- **subagent 输出摘要**（主 agent 直接执行）：
+  - **Step 1 RED 证据**：`uv run pytest tests/unit/test_agent.py -v` → `ModuleNotFoundError: No module named 'miniagent.agent'`，pytest collection error。RED 触发。
+  - **Step 2 GREEN #1**：写 `src/miniagent/agent.py`（5 个 Event dataclass + 3 个 Protocol + 2 个 helper + `run()` 循环）。pytest → `4 passed, 1 mypy 6 errors, 1 ruff 2 errors`。
+  - **Step 3 GREEN #2（6 个 mypy 修复）**：
+    1. `agent.py:19` `args: dict` → `dict[str, Any]`（ToolCallStart 字段）
+    2. `agent.py:47` `messages: list[dict], tools: list[dict]` → `list[dict[str, Any]]`（LLMProtocol）
+    3. `agent.py:52` `all_schemas() -> list[dict]` → `list[dict[str, Any]]`（ToolsProtocol）
+    4. `agent.py:60` `tool_calls: list` → `list[Any]`（`_to_assistant_message` 参数）
+    5. `agent.py:87` `messages: list[dict]` → `list[dict[str, Any]]`（`run()` 参数）
+    6. `agent.py:93` `-> list[dict]` → `list[dict[str, Any]]`（`run()` 返回值）
+    全部按 Task 2/3/9 教训"all `dict` 写 `[str, Any]`"修复，不留 `# type: ignore`。
+  - **Step 4 GREEN #3（2 个 ruff F841 修复）**：test_agent.py:61 与 test_agent.py:88 的 `msgs = await run(...)` 赋值后未用。spec 模板里写 `msgs` 是想"演示 run 返回值"，但测试只关心 `events`。**修复**：保留 `msgs =` 赋值（表达"returned messages list"是契约的一部分），加 `assert msgs` 让变量被实际使用——既消 F841 又表达"返回值非空"的契约。
+  - **Step 5 全量回归**：`uv run pytest` → `47 passed in 1.84s`（43 prior + 4 new），无回归。
+  - **Step 6 lint 零偏离**：`ruff check src tests` → `All checks passed!`；`mypy src` → `Success: no issues found in 7 source files`。
+- **人工干预**（2 项 plan 之外的修复）：
+  - **6 个 mypy `dict` 错**——Task 2/3/9 教训"all `dict` 写 `[str, Any]`"在 Task 11 集中爆发。spec 模板的 `Protocol` 用 `list[dict]` 简化，但 mypy strict 不接受。**全部按 spec 字面照搬加泛型**——6 处全补，不留任何 `# type: ignore`。
+  - **2 个 ruff F841**——`msgs = await run(...)` 未用。spec 写这个赋值是有意的（演示返回值），但 ruff 不读心。**用 `assert msgs` 既消错又保留意图**——比改成 `await run(...)` 删变量好（保留"returned messages list 是契约"的可读性）。
+- **学到的教训**：
+  - **Task 2/3/9 教训"`dict` 必加 `[str, Any]`"在 Task 11 集中验证**——一次性 6 处修复，确认是项目级硬规则。**这条规则在项目里已经触发 13+ 次（Tasks 2, 3, 9, 10, 11）——值得在 CLAUDE.md 或项目 linting guide 里显式记录**。**未来 subagent 写新模块第一行 import `from typing import Any` + 所有 `dict`/`list` 字面量必须 typed**。
+  - **`Protocol` 类的 `list[dict]` 注解**——Task 11 spec 用 `Protocol` 抽象 LLM/Tools/Session 三个依赖的接口。`Protocol` 的方法签名必须 typed 完整（含 return type），mypy strict 不会对 `Protocol` 宽容。**教训：写 Protocol 时假设"接口会被实现方强制遵守"，所有类型必须精确**。
+  - **"未测试的代码"边界**——`run()` 的 `except Exception as e: on_event(AgentError(...)); raise` 路径对应的"非 cancelled 异常"在 4 个测试中**没有**触发（test_run_propagates_cancellation 触发的是 CancelledError，走 `except asyncio.CancelledError: raise` 分支）。**这是 spec 显式要求写的"防御性 AgentError 事件"——按 Plan 硬规则"no premature abstraction"保留**。**教训**：spec 模板的所有 `except` 分支都按字面照搬（包括"非 cancelled 异常 → 发 AgentError"），即使没测试覆盖——Task 13 TUI 会订阅 AgentError 事件，没有它 TUI 没法处理"agent 死掉"的情况。
+  - **`CancelledError` 必须透传"是项目级硬约束"**——`except CancelledError: raise` 而不是 `except CancelledError: pass`。**理由**：TUI 在 `on_input_submitted` 里 `task.cancel()`，期望 `task` 在 cancel 后正常结束（await task 不抛 `CancelledError` 给用户看，但 task 内部可以 re-raise 让 caller's `await task` 感知）。**subagent 写 async loop 时一定不要"吞" CancelledError——它是控制流，不是错误**。
+  - **FakeLLM/FakeTools 的 `dataclass` 简化是测试可读性关键**——`@dataclass class FakeLLM: responses: list; async def stream_step(self, ...): return self.responses.pop(0)`，比写 `class FakeLLM(LLMProtocol): ...` 简洁。**教训**：mock 类不一定需要"实现 protocol"——鸭子类型 + mypy `# type: ignore[arg-type]` 就够，spec 这么写是有意的"可读性 > 严格性" trade-off。
+  - **Test #4 的"hanging LLM"模式**——`async def stream_step(self, ...): await asyncio.sleep(10); return "", []`，通过 `task.cancel()` 触发 CancelledError。这是"测 cancellation"的经典 pattern。**教训**：测 cancellation 必须有"会阻塞的 fake"——否则 `task.cancel()` 不会触发 `CancelledError`（因为 fake 立即 return）。本次 fake 用 `asyncio.sleep(10)` 是"永不返回"的最小实现。
 - **学到的教训**：
   - **spec 写"环境敏感"测试时必须显式 monkeypatch env var**——Task 4 的 handler 从 `os.environ.get("MINI_AGENT_WORKSPACE", ...)` 读 workspace，spec 写测试时漏了 `monkeypatch.setenv`。教训：**所有读 env var 的代码，测试必须显式设 env var**（用 pytest 的 `monkeypatch` fixture，自动 cleanup）。spec 作者容易默认"测试在容器里跑，环境已配好"——但 pytest 用的是 host 进程的环境，不是容器。Task 2/3 的 monkeypatch 教训（"测试资源必须被读取才算测试"）在 Task 4 演化成"**环境依赖必须被注入才算测试**"。
   - **测试文件顶部的 import 失败会让整个 module 收不到任何 item**——本次 RED 输出不是"5 failed"，而是 `Interrupted: 1 error during collection`。这是个**比"5 failed"更强的失败信号**：测试文件根本进不了 runner，因为 import 期就崩了。如果未来看到 collection error，第一反应是看 traceback 顶部的 `in <module>` 那一行——是 import 失败，不是 test 失败。**教训：test module 顶部的 import 越少越好**（"side-effect import"会让 RED 阶段无法精确报告哪个 test 红），但 `read_file` 这种 spec 显式要求的 import 不可避免。
