@@ -101,9 +101,53 @@ read_file = Tool(
 )
 
 
+# ---------------------------------------------------------------------------
+# Task 5: write_file tool
+# ---------------------------------------------------------------------------
+
+
+async def _write_file_handler(args: dict[str, Any]) -> ToolResult:
+    root = Path(os.environ.get("MINI_AGENT_WORKSPACE", Path.cwd()))
+    try:
+        path = resolve_sandbox_path(root, args["path"])
+    except ValueError as e:
+        return ToolResult(error=str(e))
+
+    content = args["content"]
+    if not isinstance(content, str):
+        return ToolResult(error=f"content must be str, got {type(content).__name__}")
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    except OSError as e:
+        return ToolResult(error=f"{type(e).__name__}: {e}")
+
+    return ToolResult(output=f"Wrote {len(content.encode('utf-8'))} bytes to {args['path']}")
+
+
+write_file = Tool(
+    name="write_file",
+    description=(
+        "Create or overwrite a file with the given content. "
+        "Parent directories are created automatically."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "content": {"type": "string"},
+        },
+        "required": ["path", "content"],
+    },
+    handler=_write_file_handler,
+)
+
+
 # Registry populated by later tasks; declared here so the import works.
 REGISTRY: dict[str, Tool] = {
     "read_file": read_file,
+    "write_file": write_file,
 }
 
 

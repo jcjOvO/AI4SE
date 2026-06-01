@@ -9,6 +9,7 @@ from miniagent.tools import (  # noqa: F401
     ToolResult,
     read_file,
     resolve_sandbox_path,
+    write_file,
 )
 
 
@@ -88,3 +89,54 @@ async def test_read_file_binary(tmp_workspace: Path, monkeypatch: pytest.MonkeyP
     assert r.error is None
     # Should be hex-preview, not raw
     assert "00 01 02" in r.output or "000102" in r.output
+
+
+# ---------------------------------------------------------------------------
+# Task 5: write_file tool
+# ---------------------------------------------------------------------------
+
+
+async def test_write_file_creates(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    r = await write_file.handler({"path": "out.txt", "content": "hi\n"})
+    assert r.error is None
+    assert (tmp_workspace / "out.txt").read_text() == "hi\n"
+
+
+async def test_write_file_overwrites(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    (tmp_workspace / "f.txt").write_text("old")
+    r = await write_file.handler({"path": "f.txt", "content": "new"})
+    assert r.error is None
+    assert (tmp_workspace / "f.txt").read_text() == "new"
+
+
+async def test_write_file_creates_parent_dirs(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    r = await write_file.handler({"path": "deep/nested/dir/f.txt", "content": "x"})
+    assert r.error is None
+    assert (tmp_workspace / "deep" / "nested" / "dir" / "f.txt").exists()
+
+
+async def test_write_file_rejects_traversal(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    r = await write_file.handler({"path": "../escape.txt", "content": "x"})
+    assert r.is_error
+    assert "escapes sandbox" in r.error
+    assert not (tmp_workspace.parent / "escape.txt").exists()
+
+
+async def test_write_file_returns_size(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    r = await write_file.handler({"path": "f.txt", "content": "abcde"})
+    assert "5 bytes" in r.output

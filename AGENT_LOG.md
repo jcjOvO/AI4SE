@@ -18,6 +18,7 @@
 | 4 | 2026-06-01 | Phase 4 实现 Task 2 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | subagent 严格 TDD 实现 Config 模块：3 个测试（minimal load / missing api_key / CLI override）+ TOML 加载 + Pydantic 校验 + CLI overlay（commit 见 #4 详情） |
 | 5 | 2026-06-01 | Phase 4 实现 Task 3 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | subagent 严格 TDD 实现 Tools 模块骨架：4 个测试（sandbox 路径 inside/traversal/absolute-outside + `ToolResult.is_error`）+ `ToolResult`/`Tool`/`REGISTRY`/`resolve_sandbox_path`/`all_schemas`/`execute`（commit 见 #5 详情） |
 | 6 | 2026-06-01 | Phase 4 实现 Task 4 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | subagent 严格 TDD 实现 `read_file` tool：5 个测试（basic/missing/offset+limit/traversal/binary）+ `_read_file_handler` + `read_file` Tool + `REGISTRY` 填充（commit 见 #6 详情） |
+| 7 | 2026-06-01 | Phase 4 实现 Task 5 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 5：write_file tool 5 个测试（creates/overwrites/parent_dirs/traversal/returns_size）+ `_write_file_handler` + `write_file` Tool + `REGISTRY` 扩展（commit 见 #7 详情） |
 
 ---
 
@@ -203,6 +204,33 @@
   - **测试必须显式设 `MINI_AGENT_WORKSPACE` env var（spec 遗漏）**：spec 给的 5 个测试样例只 `tmp_workspace / "hello.txt"` 创建文件 + 直接调 `read_file.handler({"path": "hello.txt"})`，**没有设 env var**。但 handler 内部 `root = Path(os.environ.get("MINI_AGENT_WORKSPACE", Path.cwd()))` 读的是**当前进程的环境变量**，默认会 fall back 到 `Path.cwd()`（即 `d:/AI4SE`）而不是 `tmp_workspace`（即 `tmp_path/workspace`）。如果按 spec 字面执行，所有"在 tmp_workspace 里写文件"的测试都会失败：handler 在 `d:/AI4SE/hello.txt` 找不到文件 → `FileNotFound`。修复方法：给每个 test 加 `monkeypatch: pytest.MonkeyPatch` 参数 + `monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))`。这是 Task 2/3 同款"monkeypatch 路径对齐"模式（见 AGENT_LOG #4、#5），是 spec 写漏的最小修复，**严格不破坏"do NOT touch existing 4 tests"**（只影响 Task 4 自己的 5 个新测试）。
   - **`# noqa: F401` 维持原状**：Task 3 的 import 加 `# noqa: F401` 是为了表达"公共 API 表面"。本次合并后 `read_file` 仍走同一 noqa（`REGISTRY, ToolResult, read_file, resolve_sandbox_path` 共用），不需要新增 noqa——这是 ruff 期望的合并结果，不是漏标。
   - **没有写未测试的代码**：handler 主体（offset/limit 切片、二进制 hex-preview、IsADirectory 守卫）虽然测试不一一对应（spec 没要求覆盖 IsADirectory），但都是 spec 给的"实现模板"的字面照搬，没有 subagent 自由发挥的"小聪明"。Task 4 没有 refactor 阶段的新抽象——只有 lint 驱动的格式修正。
+
+---
+
+## #7 — 2026-06-01 — Phase 4：实现 Task 5（`write_file` tool，TDD）
+
+- **任务**：按 PLAN Task 5 严格 TDD 实现 `write_file` tool。文件：`src/miniagent/tools.py`（追加 `_write_file_handler` + `write_file` Tool + 扩展 `REGISTRY`）+ `tests/unit/test_tools.py`（追加 5 个测试）。5 个测试覆盖：(1) 创建新文件；(2) 覆盖已存在文件；(3) 自动创建父目录；(4) 拒绝 sandbox 外路径；(5) 返回 "X bytes" 字符串。
+- **触发的 Superpowers 技能**：
+  - `superpowers:test-driven-development`（本任务核心 — red→green→refactor）
+  - `superpowers:subagent-driven-development`（本任务由主 agent 在主线 session 中直接执行；与 Task 2/3/4 派发 subagent 模式不同，理由：Task 5 与 Task 4 共享同一文件 `tools.py`，单线程编辑避免 merge conflict；任务规模小、spec 完整，主 agent 严格 TDD 自审可保质量）
+- **关键 prompt / context**：
+  - PLAN Task 5 完整 5 步（写测试 → RED → 实现 → GREEN → commit）
+  - 5 项硬约束：(a) 严格 TDD；(b) RED 必看真实失败；(c) 不创建 edit_file / bash handler（Task 6/7）；(d) `REGISTRY` 只加 `write_file`，不加其他；(e) 不动 `read_file` handler 与 Task 4 5 个测试
+  - CLAUDE.md Hard Rule #1：commit 前必须有 AGENT_LOG 条目
+- **subagent 输出摘要**（本任务由主 agent 直接执行）：
+  - **Step 1 RED 证据**：`uv run pytest tests/unit/test_tools.py -v -k write_file` → collection error: `ImportError: cannot import name 'write_file' from 'miniagent.tools'`。exit code 2，pytest interrupted。证明 RED 阶段正确触发：`write_file` 符号真实不存在。
+  - **Step 2 GREEN**：在 `tools.py` 中追加 `_write_file_handler`（root 从 `os.environ.get("MINI_AGENT_WORKSPACE", ...)` 取 → `resolve_sandbox_path` 校验 → `isinstance(content, str)` 类型检查 → `path.parent.mkdir(parents=True, exist_ok=True)` → `path.write_text(content, encoding="utf-8")` → 返回 "Wrote N bytes to <path>"）+ 定义 `write_file = Tool(...)` + 把 `REGISTRY` 从 `{"read_file": read_file}` 扩展为含 `write_file`。pytest → `5 passed in 0.11s`。
+  - **Step 3 全量回归**：`uv run pytest` → `17 passed in 0.28s`（3 from Task 2 config + 9 from Task 3/4 tools + 5 from Task 5 write_file），无 Task 2/3/4 回归。
+  - **Step 4 lint 零偏离**：`ruff check src tests` → `All checks passed!`；`mypy src` → `Success: no issues found in 4 source files`。零 `# type: ignore`、零 `# noqa` 增量（保持 Task 4 已有的 `REGISTRY`/`ToolResult`/`read_file`/`resolve_sandbox_path` 4 个公共 API 的 `# noqa: F401`，并加入 `write_file` 共享同一 noqa）。
+- **人工干预**（主 agent 自审的修复点）：
+  - **测试必须显式设 `MINI_AGENT_WORKSPACE` env var**（沿用 Task 4 教训）：spec 给的 5 个测试样例未设 env var，但 handler 读 env var。给每个 test 加 `monkeypatch: pytest.MonkeyPatch` 参数 + `monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))`。这是 Task 4 教训的同款"环境依赖必须被注入"，已沉淀为"所有 read_file/write_file/edit_file/bash 的测试都必须 monkeypatch env var"的硬规则。
+  - **import 合并 + 公共 API 表面表达**：把 `write_file` 加进测试文件顶部的 `from miniagent.tools import (...)` 多行 import，与 `read_file`/`resolve_sandbox_path` 共享 `# noqa: F401`。理由：测试要表达"这个模块暴露了 5 个公共符号"（REGISTRY/ToolResult/read_file/resolve_sandbox_path/write_file），合并 import 比两行重复更清晰（避免 ruff F811）。
+- **学到的教训**：
+  - **Task 4 教训在 Task 5 立即生效**——"`MINI_AGENT_WORKSPACE` 必须 monkeypatch"是项目级硬约束，已在测试 docstring 与 AGENT_LOG #6 中显式记录。本次直接照搬：5 个新测试都加 `monkeypatch` 参数与 `setenv` 行。**教训：spec 遗漏 env var 是高频 bug，写"读 env var 的代码"时必须默认"测试要 monkeypatch"**。
+  - **Task 3/4 教训在 Task 5 再次验证**——"`# noqa: F401` 共享多符号"是 ruff 的合并结果，Task 5 加入 `write_file` 不需要新加 noqa 行（`REGISTRY, ToolResult, read_file, resolve_sandbox_path, write_file` 共用同一 noqa）。**教训：noqa 行是 "这一个 import 行的所有符号" 的，不是 "一个符号一行 noqa"**。
+  - **handler 主体比测试矩阵更"防御性"**——handler 加了 `isinstance(content, str)` 类型检查（spec 没明说，但 spec 模板的 `if not isinstance(content, str): return ToolResult(error=...)` 是字面照搬）。这个检查对应的测试矩阵里没有（spec 测试都传 `str` content），属于"未测试的防御代码"。**教训：spec 给的 handler 模板是"字面照搬 vs 自由发挥"的边界——按 Plan 硬规则"no premature abstraction"，handler 模板的每行（包括 spec 没明示的 isinstance 守卫）都应照搬，不应 subagent 自由删减**。
+  - **Task 4/5 共享 `tools.py`，单线程编辑是正确选择**——Task 4 commit `10e2d94` 已 merge 到 `feature/phase-4-impl-tasks-1-3`，Task 5 在同一文件追加。如果并发派发 Task 4 与 Task 5 的 subagent，会 100% 撞 `REGISTRY` 字典的合并 conflict。**教训：共享单文件的任务必须串行**（Plan 文档的 Parallelization Map 已显式说 "Tasks 4–7 all touch `src/miniagent/tools.py`; serialize them in one worktree"）。
+  - **"主 agent 直接执行"是 Task 5 的合理选择**——Task 2/3/4 派发 subagent 是为了"context 隔离 + 严格 TDD 自审"。Task 5 同一文件追加，规模小（1 个新 Tool + 1 个新 handler + 1 个新 entry），主 agent 直接执行比"派发 subagent 等结果"更高效，且 Task 4/5/6/7 串行可保持代码编辑连贯性。**教训：subagent 派发的判断标准是"任务规模 + 文件独立性"——单文件追加 < 50 行的任务，主 agent 直接执行更优**。
 - **学到的教训**：
   - **spec 写"环境敏感"测试时必须显式 monkeypatch env var**——Task 4 的 handler 从 `os.environ.get("MINI_AGENT_WORKSPACE", ...)` 读 workspace，spec 写测试时漏了 `monkeypatch.setenv`。教训：**所有读 env var 的代码，测试必须显式设 env var**（用 pytest 的 `monkeypatch` fixture，自动 cleanup）。spec 作者容易默认"测试在容器里跑，环境已配好"——但 pytest 用的是 host 进程的环境，不是容器。Task 2/3 的 monkeypatch 教训（"测试资源必须被读取才算测试"）在 Task 4 演化成"**环境依赖必须被注入才算测试**"。
   - **测试文件顶部的 import 失败会让整个 module 收不到任何 item**——本次 RED 输出不是"5 failed"，而是 `Interrupted: 1 error during collection`。这是个**比"5 failed"更强的失败信号**：测试文件根本进不了 runner，因为 import 期就崩了。如果未来看到 collection error，第一反应是看 traceback 顶部的 `in <module>` 那一行——是 import 失败，不是 test 失败。**教训：test module 顶部的 import 越少越好**（"side-effect import"会让 RED 阶段无法精确报告哪个 test 红），但 `read_file` 这种 spec 显式要求的 import 不可避免。
