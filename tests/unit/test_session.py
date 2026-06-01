@@ -89,6 +89,7 @@ async def test_async_store_does_not_block(tmp_path: Path) -> None:
     sync = SessionStore(tmp_path / "s.db")
     sid = sync.create()
     async_store = AsyncSessionStore(sync)
+    async_store.start()
 
     t0 = asyncio.get_event_loop().time()
     for i in range(100):
@@ -112,6 +113,7 @@ async def test_async_store_close_drains_queue(tmp_path: Path) -> None:
     sync = SessionStore(tmp_path / "s.db")
     sid = sync.create()
     async_store = AsyncSessionStore(sync)
+    async_store.start()
     async_store.append_message(sid, {"role": "user", "content": "x"})
     # close() must block until the queue is fully drained
     await async_store.close()

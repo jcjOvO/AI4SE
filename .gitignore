@@ -52,6 +52,7 @@ uv.lock.bak
 .env.*.local
 *.pem
 *.key
+.mini-agent.toml
 
 # Test / coverage
 coverage/
@@ -67,3 +68,5 @@ coverage/
 logs/
 tmp/
 temp/
+
+java-hello/

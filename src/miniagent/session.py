@@ -141,7 +141,12 @@ class AsyncSessionStore:
     def __init__(self, sync_store: SessionStore):
         self._sync = sync_store
         self._queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
-        self._task = asyncio.create_task(self._flusher())
+        self._task: asyncio.Task[None] | None = None
+
+    def start(self) -> None:
+        """Start the background flusher. Must be called from a running event loop."""
+        if self._task is None:
+            self._task = asyncio.create_task(self._flusher())
 
     def append_message(self, session_id: str, msg: dict[str, Any]) -> None:
         """Sync call — enqueues and returns immediately."""
@@ -162,6 +167,8 @@ class AsyncSessionStore:
 
     async def close(self) -> None:
         """Signal flusher to drain and stop, then await it."""
-        await self._queue.put(None)
-        await self._task
+        if self._task is not None:
+            await self._queue.put(None)
+            await self._task
+            self._task = None
         self._sync.close()

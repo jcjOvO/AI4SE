@@ -75,6 +75,9 @@ class AgentApp(App[None]):
         yield Input(placeholder="Type a message and press Enter…", id="input")
 
     def on_mount(self) -> None:
+        # Start the async session flusher now that the event loop is running.
+        if hasattr(self.session, "start"):
+            self.session.start()
         self.query_one("#input", Input).focus()
         log = self.query_one(RichLog)
         log.write("[bold]Welcome to miniagent. Type a message to begin.[/bold]")
