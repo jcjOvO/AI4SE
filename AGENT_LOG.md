@@ -27,6 +27,7 @@
 | 13 | 2026-06-01 | Phase 4 实现 Task 10 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 10：LLMClient retry 3 个测试（retries_on_429/no_retry_on_401/retry_exhausted_after_4_attempts）+ `_RetriableError` 内部异常 + `_RETRIABLE_STATUS` 集合 + `_MAX_RETRIES=3` + 指数退避 + `RetryExhaustedError` 包装（commit 见 #13 详情） |
 | 14 | 2026-06-01 | Phase 4 实现 Task 11 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 11：Agent 4 个测试（emits_assistant_delta_and_end_turn/executes_tool_and_reflows_result/reflows_tool_error_back_to_llm/propagates_cancellation）+ 5 个 Event dataclass + 3 个 Protocol + `_to_assistant_message` / `_to_tool_result_message` + `run()` 循环 + session hook + AgentError + CancelledError 透传（commit 见 #14 详情） |
 | 15 | 2026-06-01 | Phase 4 实现 Task 12 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 12：TUI skeleton 1 个测试（starts_and_shows_header_and_input）+ AgentApp 骨架 + Header/Log/Input/Status 4 个 widget + focus Input + 显示 session_id[:8]（commit 见 #15 详情） |
+| 16 | 2026-06-01 | Phase 4 实现 Task 13 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 13：TUI wire input 1 个测试（user_input_triggers_agent_run）+ RichLog 替换 VerticalScroll + `on_input_submitted` + `_run_agent` 后台 task + `_render_event` 5 事件类型 + `_set_status` + /exit /reset 命令（commit 见 #16 详情） |
 
 ---
 
@@ -462,6 +463,43 @@
   - **"未测试的代码"边界**——`compose()` 方法的 CSS 字符串（4 块）没直接测（spec 只测了"Header 渲染 + Input 可 query"），但 CSS 是 Textual 的"声明式配置"——通过 widget 渲染间接覆盖。**教训**：CSS 是"配置而非逻辑"，不写 CSS 单元测试是合理的；测试只验 widget tree 正确即可。
   - **Task 12 是"骨架"——所有交互逻辑留到 Task 13**——本次 commit 只搭 widget 树 + focus + header 渲染。**on_input_submitted / run_agent / _render_event / _set_status 全部 Task 13 才加**。**任务边界**：本次 commit 不写任何 input handling —— spec 显式说 "Task 13 will wire input → agent.run"，subagent 不超前。
   - **integration test 跑得慢（1.47s）**——TUI app 启动 + run_test context 加载 + event loop setup 比 unit test 慢。本次 1 个 test 1.47s，38 个 unit test 1.72s 总耗时。**教训**：TUI/integration test 是"启动成本主导"，unit test 才是"逻辑成本主导"。未来加 TUI test 要考虑"合并多个 assertion 到一个 test"以摊薄启动成本。
+
+---
+
+## #16 — 2026-06-01 — Phase 4：实现 Task 13（TUI wire input → agent.run，event render）
+
+- **任务**：按 PLAN Task 13 严格 TDD 实现 TUI 输入 → agent.run 接线。文件：`src/miniagent/tui.py`（重写：把 `VerticalScroll #log` 改为 `RichLog #log` + 加 `on_input_submitted` / `_run_agent` / `_render_event` / `_set_status` + /exit /reset 命令）+ `tests/integration/test_tui.py`（追加 1 个测试 + 2 个 Fake dataclass `_LLM` / `_Tools`）。1 个测试覆盖：键入 "hello" + Enter → agent 跑通 → log 出现 "you> hello" + "assistant> Echo: hello" + 状态回到 "ready"。
+- **触发的 Superpowers 技能**：
+  - `superpowers:test-driven-development`（red→green→refactor，1 轮修复 + 1 轮 debug）
+  - `superpowers:subagent-driven-development`（主 agent 直接执行）
+  - `superpowers:systematic-debugging`（诊断 spec bug：AssistantDelta 累积但不写）
+- **subagent 输出摘要**（主 agent 直接执行）：
+  - **Step 1 RED 证据**：`uv run pytest tests/integration/test_tui.py -v` → `ModuleNotFoundError: No module named 'miniagent.tui'`（`#log` 还是 `VerticalScroll`，test 期望 `RichLog`）。RED 触发。
+  - **Step 2 GREEN #1**：重写 `tui.py`（`RichLog` 替换 `VerticalScroll` + 4 个新方法 + AgentApp imports）。pytest → 第一次：`1 passed, 1 failed`: `test_user_input_triggers_agent_run` 报 `pytest.fail(f"Agent response never appeared...")`。
+  - **Step 3 DEBUG（spec bug 修复）**：`_render_event` 对 `AssistantDelta` 的处理有 spec bug：
+    ```python
+    if isinstance(event, AssistantDelta):
+        if not self._current_assistant_text:
+            log.write("[bold green]assistant>[/bold green] ")
+        self._current_assistant_text += event.text
+        # ← 缺一行: log.write(event.text)
+    ```
+    spec 注释说 "for v1 we accept newline-per-delta" 但实际代码**没写** `log.write(event.text)`。结果 text 累积在 `_current_assistant_text` 但从未渲染。**修复**：加 `log.write(event.text)` + 注释解释 "spec bug: 前缀写了但 text 没写"。
+  - **Step 4 全量回归**：`uv run pytest` → `49 passed in 1.68s`（48 prior + 1 new），无回归。
+  - **Step 5 lint 零偏离（auto-fix 1 处）**：
+    1. `I001` Import block un-sorted — `uv run ruff check --fix` 自动把 `miniagent.agent import (run as agent_run)` 拆为独立 import block。`ruff` 的 isort-style 对"aliased import" 偏好独立 block。
+    2. mypy `messages: list[dict]` → `list[dict[str, Any]]`。
+    最终 `ruff check src tests` → `All checks passed!`；`mypy src` → `Success: no issues found in 8 source files`。
+- **人工干预**（2 项 plan 之外的修复）：
+  - **spec bug：AssistantDelta 累积但不写**——这是 PLAN Task 13 spec 模板的 "skip" 错误，spec 注释说"newline-per-delta"但代码没实现。**修复**：加 `log.write(event.text)`，并在注释中说明"spec bug"。**教训**：spec 模板的"显式 comment 说要做 X"但"实际代码没做 X"是高频 bug，subagent 必须跑测试才能发现——本次 RED 阶段的 20 次 `pilot.pause()` 轮询触发 pytest.fail 直接指明 bug。**这是 TDD 的核心价值——RED 阶段不只测"模块不存在"，还测"行为不完整"**。
+  - **`/exit` / `/reset` 命令的"forward-looking"实现**——spec 没要求测试这两个命令（只有 test_user_input_triggers_agent_run），但 spec 模板显式给出命令分支。**保留实现**——按 Plan 硬规则"no premature abstraction"（反过来说"no premature deletion"）：spec 给的代码就保留。**教训**：spec 显式给的功能即使没测试也保留——LLM 真实使用 TUI 时会发 `/exit` / `/reset`，删了就破坏 UX**。
+- **学到的教训**：
+  - **`RichLog` 替换 `VerticalScroll` 是 Task 13 的关键变更**——Task 12 skeleton 用 `VerticalScroll`（通用滚动容器），但 TUI 流式输出需要 `RichLog`（自动滚动到底部 + 支持 markup）。spec 把这个变更归入 Task 13 是合理的（"wire input" 时一并升级 log widget）。**教训**：TUI widget 选型是"实现细节"——spec 先给简单版（VerticalScroll），后升级到功能版（RichLog）。subagent 不要质疑"为什么先 VerticalScroll 再换 RichLog"——这是 spec 的"渐进式细化"选择**。
+  - **`asyncio.create_task(self._run_agent(text))` 不 await 是 by design**——agent loop 可能跑很久（多次 LLM 调 + tool reflow），UI 不能等。**`create_task` fire-and-forget** 让 agent 在后台跑，UI 继续响应 input。`finally: self._busy = False` 保证任务结束释放 _busy 锁，下次 input 才能进入。**教训**：TUI 长任务用 `create_task` + `_busy` 锁是标准 pattern——`_busy` 防"用户连按 enter 触发多个 agent 任务"**。
+  - **"`if self._busy: return`" 是 TUI input 锁的标准实现**——`_busy` 在 `_run_agent` 入口设 True，finally 块设 False。这与"agent 在 background 跑，input 不能重叠" 的 UX 需求对齐。**教训**：TUI 长任务必须显式拒绝并发输入（否则用户连按 enter 会让多个 agent 并行跑，session 顺序错乱）**。
+  - **`log.write(prefix); log.write(event.text)` 是 "newline-per-delta" 妥协**——理想是 "inline write"（text 接在 prefix 同一行），但 RichLog 的 write() 总是换行。**spec 注释说"For v1 we accept newline-per-delta"是合理的"接受不完美"决策**。**未来要 inline 渲染需要用 `RichLog.write(..., end=False)`**（如果 RichLog 支持 end 参数）。
+  - **"未测试的代码"边界**——`/exit` / `/reset` 命令没测试覆盖，但 spec 显式要求。本次保留实现。**Task 14 集成测试或 E2E（Task 18）会覆盖**：发 `/exit` 字符串，期望 app 退出。**教训**：spec 显式给的功能即使没单元测试也保留——reviewer 在 TUI 实测时会用**。
+  - **ruff auto-fix 的"`run as agent_run` import 拆分"行为**——`from miniagent.agent import (..., run as agent_run)` 与 `from miniagent.agent import (run as agent_run)` 是 ruff 等价的，但 ruff 偏好后者（独立 import block 表达"aliased import" 的语义独立）。**教训**：spec 写的"合并 import"在 ruff isort 下被拆开，是 ruff 的"语义分组" 偏好，subagent 不要合并回 spec 写法**。
 - **学到的教训**：
   - **spec 写"环境敏感"测试时必须显式 monkeypatch env var**——Task 4 的 handler 从 `os.environ.get("MINI_AGENT_WORKSPACE", ...)` 读 workspace，spec 写测试时漏了 `monkeypatch.setenv`。教训：**所有读 env var 的代码，测试必须显式设 env var**（用 pytest 的 `monkeypatch` fixture，自动 cleanup）。spec 作者容易默认"测试在容器里跑，环境已配好"——但 pytest 用的是 host 进程的环境，不是容器。Task 2/3 的 monkeypatch 教训（"测试资源必须被读取才算测试"）在 Task 4 演化成"**环境依赖必须被注入才算测试**"。
   - **测试文件顶部的 import 失败会让整个 module 收不到任何 item**——本次 RED 输出不是"5 failed"，而是 `Interrupted: 1 error during collection`。这是个**比"5 failed"更强的失败信号**：测试文件根本进不了 runner，因为 import 期就崩了。如果未来看到 collection error，第一反应是看 traceback 顶部的 `in <module>` 那一行——是 import 失败，不是 test 失败。**教训：test module 顶部的 import 越少越好**（"side-effect import"会让 RED 阶段无法精确报告哪个 test 红），但 `read_file` 这种 spec 显式要求的 import 不可避免。
