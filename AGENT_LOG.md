@@ -16,6 +16,7 @@
 | 2 | 2026-06-01 | Phase 1 Init | `init` | 创建 CLAUDE.md 供未来 subagent 使用，并显式把 §4.9 日志要求写入项目操作手册 |
 | 3 | 2026-06-01 | Phase 4 实现 Task 1 | `superpowers:executing-plans` | 用户授权跳过冷启动验证，直接执行 PLAN Task 1：bootstrap uv 项目骨架 + 测试基建（commit 见 #3 详情） |
 | 4 | 2026-06-01 | Phase 4 实现 Task 2 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | subagent 严格 TDD 实现 Config 模块：3 个测试（minimal load / missing api_key / CLI override）+ TOML 加载 + Pydantic 校验 + CLI overlay（commit 见 #4 详情） |
+| 5 | 2026-06-01 | Phase 4 实现 Task 3 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | subagent 严格 TDD 实现 Tools 模块骨架：4 个测试（sandbox 路径 inside/traversal/absolute-outside + `ToolResult.is_error`）+ `ToolResult`/`Tool`/`REGISTRY`/`resolve_sandbox_path`/`all_schemas`/`execute`（commit 见 #5 详情） |
 
 ---
 
@@ -140,3 +141,38 @@
   - **mypy strict + dict 泛型是高频地雷**——`_deep_merge(base: dict, ...)` 在 mypy strict 下必报。`dict` ≠ `dict[str, Any]`（前者相当于 `dict[Any, Any]`，list/dict 嵌套场景下报错）。subagent 写 "通用 helper"时容易漏泛型参数。**教训：所有 `dict` 显式写 `dict[str, Any]`**（除非真要 heterogeneous key 类型）。
   - **linter 主动改文件无需 rollback**——ruff auto-fix 与 mypy strict 反馈是"工具在帮我"，不是"我写错了"。`LLMConfig` 在 test 里 imported but unused，移除是正确的（Python 风格上 unused import 是 noise）。本次保留 linter 的修改不恢复，并接受"`from miniagent.config import Config, LLMConfig, load_config` → `from miniagent.config import Config, load_config`"是 spec 的合理改进。
   - **TDD 红绿循环的"红"必须真实存在**——本次 RED 输出 `ModuleNotFoundError` 是真实的（不是 `assert False` 的占位），证明"模块不存在"是测试**真正**在测的东西。未来 subagent 不要写"先写 pass 的测试再写实现"——那等于没测。
+
+---
+
+## #5 — 2026-06-01 — Phase 4：实现 Task 3（Tools 模块骨架，TDD）
+
+- **任务**：按 `docs/superpowers/plans/2026-06-01-mini-coding-agent-tui.md` 的 Task 3，严格 TDD 实现 Tools 模块骨架。文件：`src/miniagent/tools.py` + `tests/unit/test_tools.py`。4 个测试覆盖：(1) `resolve_sandbox_path` 接受 sandbox 内的相对路径并 resolve 为绝对路径；(2) `resolve_sandbox_path` 拒绝 `../etc/passwd` 形式的 traversal（`ValueError` 含 "escapes sandbox"）；(3) `resolve_sandbox_path` 拒绝 sandbox 外的绝对路径 `/etc/passwd`；(4) `ToolResult.is_error` 在 `error` 为 `None` 时为 `False`、有 `error` 时为 `True`。REGISTRY 留空（Tasks 4–7 会填充 4 个 tool）。
+- **触发的 Superpowers 技能**：
+  - `superpowers:test-driven-development`（本任务核心 — red→green→refactor，1 个 RED 阶段 + 1 个 GREEN 阶段 + 1 个 REFACTOR 阶段）
+  - `superpowers:subagent-driven-development`（我本身就是被主 agent 派发的 subagent，按 PLAN Task 3 spec 直接执行）
+- **关键 prompt / context**：
+  - 主 agent 给我的 spec 包含 8 步严格 TDD 流程（写测试 → 看 RED → 写最小实现 → 看 GREEN → lint/mypy → 日志 → commit → 勾 plan）
+  - 硬约束：(a) 严格 TDD 不可破（写测试先于实现）；(b) RED 阶段必须"看真实失败输出"再写实现；(c) 不写未测试的代码；(d) 不创建 `read_file` / `write_file` / `edit_file` / `bash` handler（Tasks 4–7）；(e) REGISTRY 留空
+  - spec 关于 linter 偏离的两条允许：(1) "if ruff complains about `field` import, accept removal"；(2) "if mypy has issues with `handler` Callable type, leave as-is" — 显式给 subagent 留出对 forward-looking import/annotation 的灵活度
+  - CLAUDE.md Hard Rule #1：commit 前必须有 AGENT_LOG 条目
+  - §4.9 schema：日志必须含时间戳 / task 编号 / 触发技能 / 关键 prompt / subagent 输出 / 人工干预 / 学到的教训
+- **subagent 输出摘要**（本任务由 subagent——也就是我——执行）：
+  - **Step 2 RED 证据**：`uv run pytest tests/unit/test_tools.py -v` → `ModuleNotFoundError: No module named 'miniagent.tools'`（位于 test_tools.py:7 的 import 行）。exit code 2，pytest collection error。证明 RED 阶段正确触发：测试**真实地**在测 `miniagent.tools` 模块的存在性，不是占位。
+  - **Step 3 GREEN**：写最小实现 `src/miniagent/tools.py`（`ToolResult` dataclass + `is_error` property + `Tool` dataclass + `resolve_sandbox_path` + 空 `REGISTRY: dict[str, Tool]` + `all_schemas()` + `async execute()`）。pytest → `4 passed in 0.06s`。
+  - **Step 4 全量回归**：`uv run pytest` → `7 passed in 0.27s`（3 from Task 2 config + 4 from Task 3 tools），无 Task 2 回归。
+  - **Step 5 lint 偏离**：
+    1. ruff: `tests/unit/test_tools.py:7` `F401: REGISTRY imported but unused`。测试 spec 明确要求 import `REGISTRY`（"exact content"），故加 `# noqa: F401` 标记为有意的 public-API import，不删除。理由：测试要表达"这个模块暴露了 REGISTRY 公共 API"这件事，即使当前 4 个测试没用上。
+    2. ruff: 主动删除 spec 给的 `from dataclasses import dataclass, field` 中的 `field`（spec 自己也说"if ruff complains, accept removal"——即便 ruff 没真报 unused，因为 plan 的 `field` 还没用上，移除更干净）。已记录为 linter-driven deviation。
+    3. mypy strict: `tools.py:25 input_schema: dict` + `tools.py:49 all_schemas() -> list[dict]` 报 `Missing type arguments for generic type "dict"`。按 Task 2 教训"**所有 `dict` 显式写 `dict[str, Any]`**"，改为 `dict[str, Any]` 与 `list[dict[str, Any]]`。mypy → `Success: no issues found in 4 source files`。无 `# type: ignore`。
+  - **REFACTOR 验证**：ruff + mypy + pytest 三项全绿后，复跑 pytest 再确认 4 测试仍全过（防止 refactor 时改坏）。仍 `4 passed`。
+- **人工干预**（按 subagent-driven-development 流程，主 agent 之外的额外修复点）：
+  - **mypy 偏离 spec 显式允许**：spec 说"if mypy has issues with the `handler` Callable type, leave it as-is (it's a forward reference for Tasks 4-7)"。但实际报错的不是 `Callable[[dict[str, Any]], ...]` 内层（已 typed），而是 `input_schema: dict` 外层与 `all_schemas() -> list[dict]` 返回值。这两处本质相同（都是"给后续 task 用的 dict 容器"），按 Task 2 的硬规则"先写类型"修，而不是 `# type: ignore`。理由：mypy 报错是因为 spec 的 dict 缺类型参数，而非类型真的复杂；硬规则优于"留 TODO"——mypy strict 下没有"不写类型"的中间态。
+  - **`noqa: F401` 显式记录原因**：未删除 `REGISTRY` import（spec 要求 "exact content"），但加 `# noqa: F401` 并在 AGENT_LOG 写明"这是有意的 public-API 暴露"。**不要**在 "无说明" 的情况下用 noqa——每个 noqa 必须是"我故意这样"的可追溯决策。
+  - **linter 偏离 `<` strict 注释**: spec 写"`field` 导入但不用的容忍"，本次提前删除而非保留。理由：`field` 是 dataclass field 的 factory 写法（`field(default_factory=...)`），Task 3 的 `ToolResult` 只有两个 default 简单字段（`str = ""` 与 `str | None = None`），用不到 `field`；Tasks 4–7 的 handler 实现也用 `default` 直接赋值即可，不依赖 `field`。所以现在删比 Tasks 4–7 真用上时再加更干净。
+- **学到的教训**：
+  - **`# noqa: F401` 用于"表达公共 API 表面"是正确的用法**——测试 import `REGISTRY` 不为使用，只为"证明这个符号在那个模块里可被 import"。这是 Python 类型系统没有"接口"概念时的常见 workaround（替代品是 re-export `__all__`，但 re-export 又要全 test 覆盖）。**教训：spec 写 "exact content" 但 linter 报 unused import 时，加 `# noqa: F401` + AGENT_LOG 记录原因**——比改 spec 或删 import 都好。
+  - **Task 2 的"所有 dict 写 [str, Any]"教训在 Task 3 立即生效**——本任务的 mypy 报错与 Task 2 完全同构（`dict` vs `dict[str, Any]`），证明 Task 2 总结的教训是项目级硬约束，不是偶发。下次写新文件前先全文检索 `_deep_merge` / `cli_overrides` 等已知 dict 缺类型参数的位置作为"历史错误样本"。这个 project memory 比 plan 文件更可靠。
+  - **"spec 允许的偏离"不等于"必须照搬 spec"**——spec 给了两条灵活度（"if ruff complains about `field`" + "if mypy has issues with `handler` Callable"），但实际报错位置不同。本次我**主动**用 spec 的精神（"forward-looking 类型可后补"）而非 spec 的字面（"handler 那行别动"）——这正是 PLAN 文件"self-review fixes"commit `92adb2f` 的同款心法：spec 是初稿，落地时按工具反馈校正。
+  - **"空 REGISTRY"是 Task 3 的关键约束，必须守住**——SPEC §"scope of not-doing" + Task 3 spec 都说"do NOT add read_file / write_file / edit_file / bash handlers — those are Tasks 4–7"。subagent 容易"顺手把 read_file 也写了，反正测试也过了"——那是 Hard Rule #3 violation。**教训：每完成一个 PLAN task，commit message 与 AGENT_LOG 必须显式声明"未做哪些未来 task"**——本次 commit message `feat(tools): ToolResult, REGISTRY, path sandbox helper`（不提任何具体工具名），AGENT_LOG 明写"REGISTRY 留空"，双重声明边界。
+  - **TDD 的 "RED 必看真实失败" 在 Task 3 的具体体现**——RED 阶段 `pytest` 输出是 `ModuleNotFoundError: No module named 'miniagent.tools'`，**这正是 spec §Step 2 期望的失败模式**（"Expected: ImportError (module doesn't exist yet)"）。如果 RED 阶段报别的错（比如 `SyntaxError: invalid syntax` 或 `AssertionError`），说明 spec 与实现意图不一致，必须停下来分析。本次 RED 100% 符合 spec 预期，没有走偏。
+
