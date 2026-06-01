@@ -3190,7 +3190,7 @@ git commit -m "docs: log Phase 4 implementation + tick plan checkboxes"
 - [x] Task 2: Config — Pydantic + TOML loading
 - [x] Task 3: Tools — ToolResult + REGISTRY + path sandbox (commit `a33a699`)
 - [x] Task 4: read_file
-- [ ] Task 5: write_file
+- [x] Task 5: write_file (commit `c75d2dc`)
 - [ ] Task 6: edit_file
 - [ ] Task 7: bash + path-escape detection
 - [ ] Task 8: Session — schema + CRUD
