@@ -1,7 +1,9 @@
 """Tool registry and the 4 built-in tools."""
 from __future__ import annotations
 
+import asyncio
 import os
+import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -205,11 +207,115 @@ edit_file = Tool(
 )
 
 
+# ---------------------------------------------------------------------------
+# Task 7: bash tool
+# ---------------------------------------------------------------------------
+
+
+def _command_escapes_sandbox(command: str, root_resolved: Path) -> str | None:
+    """Return the offending path token if `command` references anything outside `root_resolved`.
+
+    `root_resolved` must already be `.resolve()`d by the caller (so this
+    function is safe to call from async code without blocking I/O).
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None  # let the shell fail; not a sandbox concern
+    # Strip shell metachars
+    file_like = [
+        t for t in tokens if not t.startswith(("-", "$", ";")) and "=" not in t
+    ]
+    for tok in file_like:
+        # skip obvious non-paths
+        if tok in {"&&", "||", "|", ">", "<", ">>", "<<<", "2>&1"}:
+            continue
+        if (
+            tok.startswith(("./", "/", "../"))
+            or "/" in tok
+            or tok in {".", ".."}
+        ):
+            try:
+                if Path(tok).is_absolute():
+                    candidate = Path(tok).resolve()
+                else:
+                    candidate = (root_resolved / tok).resolve()
+                candidate.relative_to(root_resolved)
+            except (ValueError, OSError):
+                return tok
+    return None
+
+
+async def _bash_handler(args: dict[str, Any]) -> ToolResult:
+    root = Path(os.environ.get("MINI_AGENT_WORKSPACE", Path.cwd()))
+    command = args["command"]
+    timeout = int(args.get("timeout", 30))
+
+    # .resolve() may hit the filesystem (symlinks, Windows quirks), so
+    # offload to a thread to avoid blocking the event loop (ASYNC240).
+    root_resolved = await asyncio.to_thread(root.resolve)
+    escaper = _command_escapes_sandbox(command, root_resolved)
+    if escaper is not None:
+        return ToolResult(
+            error=f"Path escapes sandbox: '{escaper}' is outside {root_resolved}"
+        )
+
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(root_resolved),
+        )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return ToolResult(error=f"Command timed out after {timeout}s")
+    except Exception as e:
+        return ToolResult(error=f"{type(e).__name__}: {e}")
+
+    stdout = stdout_b.decode("utf-8", errors="replace")
+    stderr = stderr_b.decode("utf-8", errors="replace")
+    parts = [stdout.rstrip("\n")]
+    if stderr:
+        parts.append(f"[stderr: {stderr.rstrip()}]")
+    parts.append(f"[exit: {proc.returncode}]")
+    return ToolResult(output="\n".join(parts))
+
+
+bash = Tool(
+    name="bash",
+    description=(
+        "Execute a shell command in the workspace. Returns stdout, stderr, and exit code. "
+        "Commands referencing paths outside the workspace are rejected. "
+        "Default timeout 30s (configurable)."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "command": {"type": "string"},
+            "timeout": {
+                "type": "integer",
+                "default": 30,
+                "description": "Timeout in seconds",
+            },
+        },
+        "required": ["command"],
+    },
+    handler=_bash_handler,
+)
+
+
 # Registry populated by later tasks; declared here so the import works.
 REGISTRY: dict[str, Tool] = {
     "read_file": read_file,
     "write_file": write_file,
     "edit_file": edit_file,
+    "bash": bash,
 }
 
 

@@ -7,6 +7,7 @@ import pytest
 from miniagent.tools import (  # noqa: F401
     REGISTRY,
     ToolResult,
+    bash,
     edit_file,
     read_file,
     resolve_sandbox_path,
@@ -209,3 +210,69 @@ async def test_edit_file_rejects_traversal(
     })
     assert r.is_error
     assert "escapes sandbox" in r.error
+
+
+# ---------------------------------------------------------------------------
+# Task 7: bash tool
+# ---------------------------------------------------------------------------
+
+
+async def test_bash_runs_command(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    r = await bash.handler({"command": "echo hello"})
+    assert r.error is None
+    assert "hello" in r.output
+    assert "exit: 0" in r.output
+
+
+async def test_bash_captures_nonzero_exit(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    r = await bash.handler({"command": "exit 7"})
+    # Non-zero exit is NOT an error; it's reported in output
+    assert r.error is None
+    assert "exit: 7" in r.output
+
+
+async def test_bash_captures_stderr(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    r = await bash.handler({"command": "echo oops >&2; echo ok"})
+    assert r.error is None
+    assert "oops" in r.output
+    assert "ok" in r.output
+
+
+async def test_bash_rejects_path_escape(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    # Outside-root path → reject
+    r = await bash.handler({"command": "cat /etc/passwd"})
+    assert r.is_error
+    assert "escapes sandbox" in r.error
+
+
+async def test_bash_rejects_traversal_token(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    r = await bash.handler({"command": "ls ../"})
+    assert r.is_error
+    assert "escapes sandbox" in r.error
+
+
+async def test_bash_respects_workspace_root(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    r = await bash.handler({"command": "pwd"})
+    assert r.error is None
+    # Subprocess shells on Windows (MSYS/Git Bash) may translate the cwd
+    # to a Posix-style path (e.g. `/tmp/...`); check the leaf name
+    # invariant instead of the full path.
+    assert tmp_workspace.name in r.output
