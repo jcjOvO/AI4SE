@@ -3199,7 +3199,7 @@ git commit -m "docs: log Phase 4 implementation + tick plan checkboxes"
 - [x] Task 11: Agent — run() loop
 - [x] Task 12: TUI — App skeleton
 - [x] Task 13: TUI — input → agent + event render
-- [ ] Task 14: __main__ CLI
+- [x] Task 14: __main__ CLI
 - [ ] Task 15: Dockerfile + compose
 - [ ] Task 16: CI workflows
 - [ ] Task 17: README quick-start
