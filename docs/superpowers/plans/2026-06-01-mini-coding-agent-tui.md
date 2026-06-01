@@ -440,7 +440,7 @@ git commit -m "feat(config): TOML loading with Pydantic + CLI overlay + fail-fas
 
 ---
 
-## Task 3: Tools module — `ToolResult` + `REGISTRY` + path sandbox helper
+## Task 3: Tools module — `ToolResult` + `REGISTRY` + path sandbox helper (commit `a33a699`)
 
 **Files:**
 - Create: `src/miniagent/tools.py`
@@ -3188,7 +3188,7 @@ git commit -m "docs: log Phase 4 implementation + tick plan checkboxes"
 
 - [x] Task 1: Project skeleton + uv + test infrastructure (commit `79bd723`)
 - [x] Task 2: Config — Pydantic + TOML loading
-- [ ] Task 3: Tools — ToolResult + REGISTRY + path sandbox
+- [x] Task 3: Tools — ToolResult + REGISTRY + path sandbox (commit `a33a699`)
 - [ ] Task 4: read_file
 - [ ] Task 5: write_file
 - [ ] Task 6: edit_file
