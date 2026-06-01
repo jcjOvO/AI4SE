@@ -3192,7 +3192,7 @@ git commit -m "docs: log Phase 4 implementation + tick plan checkboxes"
 - [x] Task 4: read_file
 - [x] Task 5: write_file (commit `c75d2dc`)
 - [x] Task 6: edit_file
-- [ ] Task 7: bash + path-escape detection
+- [x] Task 7: bash + path-escape detection
 - [ ] Task 8: Session — schema + CRUD
 - [ ] Task 9: LLM client — stream_step
 - [ ] Task 10: LLM client — retry
