@@ -1,8 +1,10 @@
 """SQLite-backed session storage."""
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -77,12 +79,13 @@ class SessionStore:
         return SessionMeta(id=row[0], title=row[1], created_at=row[2], updated_at=row[3])
 
     def list_recent(self, limit: int = 20) -> list[SessionMeta]:
-        # Tie-break by created_at DESC (and id DESC for fully-identical
-        # timestamps) so that sessions created in the same nanosecond
-        # still come back in a deterministic, most-recent-first order.
+        # Tie-break by `rowid` (SQLite's implicit insertion-order column) so
+        # sessions created in the same nanosecond come back in a deterministic
+        # most-recent-first order. `id` is a random UUID4 and would not
+        # correlate with insertion order.
         rows = self._con.execute(
             "SELECT id, title, created_at, updated_at FROM sessions "
-            "ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT ?",
+            "ORDER BY updated_at DESC, rowid DESC LIMIT ?",
             (limit,),
         ).fetchall()
         return [
@@ -121,3 +124,46 @@ class SessionStore:
 
     def close(self) -> None:
         self._con.close()
+
+
+# ---------------------------------------------------------------------------
+# Task 8b: AsyncSessionStore — non-blocking wrapper
+# ---------------------------------------------------------------------------
+
+
+class AsyncSessionStore:
+    """Non-blocking wrapper around SessionStore.
+
+    `append_message` posts to an internal queue and returns immediately.
+    A background task drains the queue and performs the actual SQL writes.
+    `close()` awaits the drain so the caller can be sure everything is
+    persisted before the process exits.
+    """
+
+    def __init__(self, sync_store: SessionStore):
+        self._sync = sync_store
+        self._queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+        self._task = asyncio.create_task(self._flusher())
+
+    def append_message(self, session_id: str, msg: dict[str, Any]) -> None:
+        """Sync call — enqueues and returns immediately."""
+        self._queue.put_nowait((session_id, msg))
+
+    async def _flusher(self) -> None:
+        while True:
+            item = await self._queue.get()
+            if item is None:
+                return
+            sid, msg = item
+            try:
+                self._sync.append_message(sid, msg)
+            except Exception:
+                # Best-effort: re-enqueue and back off. For v1 we just log + drop.
+                # A future task will add a retry-with-backoff loop.
+                print(f"session flush failed: {msg}", file=sys.stderr)
+
+    async def close(self) -> None:
+        """Signal flusher to drain and stop, then await it."""
+        await self._queue.put(None)
+        await self._task
+        self._sync.close()

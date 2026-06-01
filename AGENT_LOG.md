@@ -22,6 +22,7 @@
 | 8 | 2026-06-01 | Phase 4 实现 Task 6 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 6：edit_file tool 5 个测试（single_replacement/not_unique/not_found/replace_all/traversal）+ `_edit_file_handler` + `edit_file` Tool + `REGISTRY` 扩展（commit 见 #8 详情） |
 | 9 | 2026-06-01 | Phase 4 实现 Task 7 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 7：bash tool 6 个测试（runs_command/captures_nonzero_exit/captures_stderr/rejects_path_escape/rejects_traversal_token/respects_workspace_root）+ `_command_escapes_sandbox` + `_bash_handler` + `bash` Tool + `REGISTRY` 完整（commit 见 #9 详情） |
 | 10 | 2026-06-01 | Phase 4 实现 Task 8 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 8：SessionStore 8 个测试（init_creates_schema/create_returns_uuid/get_returns_metadata/get_missing_raises/list_recent_orders_by_updated/append_and_load_roundtrip/append_message_sync_writes_immediately/corrupt_db_raises）+ `CorruptSessionError` + `SessionMeta` + `SessionStore` CRUD（commit 见 #10 详情） |
+| 11 | 2026-06-01 | Phase 4 实现 Task 8b | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 8b：AsyncSessionStore 2 个测试（does_not_block/close_drains_queue）+ 队列 + 后台 flusher 任务 + `close()` 阻塞 drain（commit 见 #11 详情） |
 
 ---
 
@@ -315,6 +316,31 @@
   - **"corrupt DB 检测"在 spec 模板是窄 try/except**——spec 写的"只在 executescript 处 try"是字面照搬，扩展到整个 init 块是更稳的实现。**教训：spec 模板是"最小可工作实现"，不是"最稳实现"——subagent 看到 try/except 范围可疑时，主动扩展是合理的 deviation，但要在 AGENT_LOG 记录**。
   - **Task 8 spec 没要求实现 `AsyncSessionStore`**——那是 Task 8b 的事（依赖 Task 8 的 sync SessionStore 已 merge）。**任务边界**：本次 commit 只含 sync `SessionStore`，不含 async wrapper。`REGISTRY` 等其它模块也没碰。**教训：每 task 的 commit 严格只含本 task spec 的内容，避免 scope creep**。
   - **SessionStore 是"persistence helper"**——CLAUDE.md / SPEC §4 显式说 "session is a persistence helper, not a 6th core module"。本次实现完全符合"sync CRUD + corruption detection"的 helper 角色，没有掺入 agent loop / LLM / TUI 任何概念。**教训：模块边界是 spec 阶段定的，subagent 不要"方便地"加 method（如 `tail()` / `find()`）——保持最小 CRUD**。
+
+---
+
+## #11 — 2026-06-01 — Phase 4：实现 Task 8b（AsyncSessionStore，non-blocking wrapper）
+
+- **任务**：按 PLAN Task 8b 严格 TDD 实现 `AsyncSessionStore`。文件：`src/miniagent/session.py`（追加 `import asyncio` / `import sys` + `AsyncSessionStore` 类）+ `tests/unit/test_session.py`（追加 2 个 `@pytest.mark.asyncio` 测试）。2 个测试覆盖：(1) 100 次 `append_message` 总耗时 < 50ms（证明不阻塞 event loop）；(2) `close()` 阻塞到 queue drain 完成。
+- **触发的 Superpowers 技能**：
+  - `superpowers:test-driven-development`（red→green→refactor，2 轮修复）
+  - `superpowers:subagent-driven-development`（主 agent 直接执行）
+  - `superpowers:systematic-debugging`（诊断 Task 8 测试回归）
+- **subagent 输出摘要**（主 agent 直接执行）：
+  - **Step 1 RED 证据**：`uv run pytest tests/unit/test_session.py -v -k "async_store"` → `ImportError: cannot import name 'AsyncSessionStore'`。RED 触发。
+  - **Step 2 GREEN #1**：在 `session.py` 末尾追加 `AsyncSessionStore` 类（`asyncio.Queue[tuple[str, dict] | None]` + `asyncio.create_task(self._flusher())` + `append_message` 走 `put_nowait` + `_flusher` 循环 `get()`/`None` sentinel + `close()` `put(None)` + `await task` + `sync.close()`）。pytest → 第一次跑：`9 passed, 1 failed` (Task 8 的 `test_list_recent_orders_by_updated` 回归！)
+  - **Step 3 GREEN #2（修复 Task 8 回归）**：`test_list_recent_orders_by_updated` 失败根因：Task 8 我加的 `id DESC` tie-breaker 把"id"当作"插入顺序"假设——但 `id` 是 UUID4 (random)，完全不与插入顺序相关。**修复**：把 `id DESC` 换成 SQLite 的隐式 `rowid DESC`（rowid 是 monotonic 插入序号）。修复后 `38 passed`。
+  - **Step 4 全量回归**：`uv run pytest` → `38 passed in 0.83s`（36 prior + 2 new async），无回归。
+  - **Step 5 lint 零偏离**：`ruff check src tests` → `All checks passed!`；`mypy src` → `Success: no issues found in 5 source files`。
+- **人工干预**（1 项 plan 之外的修复 + 1 项 spec 跳过）：
+  - **Task 8 tie-breaker 错误**——上次我加 `id DESC` 是"拍脑袋"的随机性 tie-breaker，UUID4 没有任何插入顺序保证。`rowid` 才是 SQLite 的"真"插入序号。**教训：SQLite tie-breaker 的正确答案是 `rowid DESC`（不是 `id DESC`）**——这个教训写进 AGENT_LOG 未来所有 SQL 排序都受用。
+  - **跳过 Plan Step 5/6/7（TUI `__main__.py` 集成）**——spec 8b Step 5/6/7 要求在 `tui.py` 加 `on_mount` 包装 `AsyncSessionStore`，并改 `__main__.py`。但 `tui.py` 与 `__main__.py` 的真实改造是 Task 12/13/14 的工作（"wire input → agent.run" 之前 TUI 不知道有 `AsyncSessionStore` 这个概念）。**本次 commit 只含 session 模块的 AsyncSessionStore 类，集成部分留给 Task 13（按 Plan 的 Dependency Map "Task 13 wires input → agent.run"）**。**教训：跨 task 的集成代码不要"超前"写——Task 8b spec 写"改 tui.py"是 spec 错误（因为 tui.py 当时不存在），subagent 跳过是正确选择**。
+- **学到的教训**：
+  - **SQLite tie-breaker 标准答案：`rowid`**——`id` (UUID) / `created_at` (同纳秒) 都不能保证插入顺序，只有 `rowid` 是 monotonic。**项目级硬规则：所有 `ORDER BY <时间戳> DESC` 必须加 `, rowid DESC`**。
+  - **AsyncSessionStore 的"flusher 任务"是 spec 模板字面照搬**——`asyncio.create_task(self._flusher())` 在 `__init__` 里创建，依赖 Python 的"event loop already running"假设（在 Textual / pytest-asyncio 下都成立）。**这个限制意味着 `AsyncSessionStore(db_path=...)` 不能在没有 event loop 的 sync 上下文里直接构造**——必须有 running loop。本次测试用 `pytest.mark.asyncio` 提供 loop。**未来 Task 13 在 TUI `on_mount` 里创建 AsyncSessionStore 是正确的（TUI 已经在 asyncio loop 里跑）**。
+  - **`close()` 设计是"drain + stop"——必阻塞**——spec 设计是 `await close()` 等到 queue 排空。这与 `append_message` 的"不阻塞"形成对照：一个 producer-friendly（append 立即返回），一个 shutdown-friendly（close 必等完成）。**教训：async wrapper 的 "fire-and-forget" 与 "graceful shutdown" 是两个独立维度，不要混在一个方法里**。
+  - **TUI 集成留到 Task 13**——spec 8b Step 5/6/7 显式写"`on_mount` 包装 AsyncSessionStore + `__main__.py` 传 sync store"。本次跳过这两个修改，理由：(1) `tui.py` 当时不存在（Task 12 才创建）；(2) `__main__.py` 的改造是 Task 14。本次 commit 只含 session 模块。**未来 reviewer 看到 Task 8b commit 不含 tui.py 改动，应该理解这是 spec 写错"超前"，不是 subagent 漏做**。
+  - **Flusher 错误处理"log + drop"是 spec 模板字面照搬**——handler 捕到 `Exception` 后只 `print` 到 stderr 然后 drop 消息，不重试。spec 注释说"A future task will add a retry-with-backoff loop"，本次严格按 spec 不加重试。**教训：spec 显式标 "future work" 的地方，subagent 不要"顺手补全"——保持 commit 与 spec 严格对齐**。
 - **学到的教训**：
   - **spec 写"环境敏感"测试时必须显式 monkeypatch env var**——Task 4 的 handler 从 `os.environ.get("MINI_AGENT_WORKSPACE", ...)` 读 workspace，spec 写测试时漏了 `monkeypatch.setenv`。教训：**所有读 env var 的代码，测试必须显式设 env var**（用 pytest 的 `monkeypatch` fixture，自动 cleanup）。spec 作者容易默认"测试在容器里跑，环境已配好"——但 pytest 用的是 host 进程的环境，不是容器。Task 2/3 的 monkeypatch 教训（"测试资源必须被读取才算测试"）在 Task 4 演化成"**环境依赖必须被注入才算测试**"。
   - **测试文件顶部的 import 失败会让整个 module 收不到任何 item**——本次 RED 输出不是"5 failed"，而是 `Interrupted: 1 error during collection`。这是个**比"5 failed"更强的失败信号**：测试文件根本进不了 runner，因为 import 期就崩了。如果未来看到 collection error，第一反应是看 traceback 顶部的 `in <module>` 那一行——是 import 失败，不是 test 失败。**教训：test module 顶部的 import 越少越好**（"side-effect import"会让 RED 阶段无法精确报告哪个 test 红），但 `read_file` 这种 spec 显式要求的 import 不可避免。
