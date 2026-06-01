@@ -249,7 +249,7 @@ Update `AGENT_LOG.md` per the §4.9 schema before this commit (or as a separate 
 
 ---
 
-## Task 2: Config module — Pydantic models + TOML loading
+## Task 2: Config module — Pydantic models + TOML loading (commit `9ede918`)
 
 **Files:**
 - Create: `src/miniagent/config.py`
@@ -3187,7 +3187,7 @@ git commit -m "docs: log Phase 4 implementation + tick plan checkboxes"
 ## Task Tracker
 
 - [x] Task 1: Project skeleton + uv + test infrastructure (commit `79bd723`)
-- [ ] Task 2: Config — Pydantic + TOML loading
+- [x] Task 2: Config — Pydantic + TOML loading
 - [ ] Task 3: Tools — ToolResult + REGISTRY + path sandbox
 - [ ] Task 4: read_file
 - [ ] Task 5: write_file
