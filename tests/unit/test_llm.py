@@ -129,3 +129,46 @@ def _empty_sse() -> str:
         {"type": "message_stop"},
     ]
     return "\n".join(f"event: {e['type']}\ndata: {json.dumps(e)}" for e in events)
+
+
+# ---------------------------------------------------------------------------
+# Task 10: retry logic
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_retries_on_429_then_succeeds(llm: LLMClient) -> None:
+    route = respx.post("https://api.example.com/v1/messages").mock(
+        side_effect=[
+            httpx.Response(429, text="rate limited"),
+            httpx.Response(429, text="rate limited"),
+            httpx.Response(
+                200, text=_empty_sse(), headers={"content-type": "text/event-stream"}
+            ),
+        ]
+    )
+    text, _ = await llm.stream_step(messages=[{"role": "user", "content": "x"}], tools=[])
+    assert text == ""
+    assert route.call_count == 3
+
+
+@respx.mock
+async def test_no_retry_on_401(llm: LLMClient) -> None:
+    respx.post("https://api.example.com/v1/messages").mock(
+        return_value=httpx.Response(401, text="bad key")
+    )
+    with pytest.raises(Exception) as exc:
+        await llm.stream_step(messages=[{"role": "user", "content": "x"}], tools=[])
+    # Should NOT be RetryExhausted; should be AuthError
+    from miniagent.llm import AuthError
+    assert isinstance(exc.value, AuthError)
+
+
+@respx.mock
+async def test_retry_exhausted_after_4_attempts(llm: LLMClient) -> None:
+    respx.post("https://api.example.com/v1/messages").mock(
+        return_value=httpx.Response(500, text="server error")
+    )
+    from miniagent.llm import RetryExhaustedError
+    with pytest.raises(RetryExhaustedError):
+        await llm.stream_step(messages=[{"role": "user", "content": "x"}], tools=[])

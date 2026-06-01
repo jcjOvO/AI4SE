@@ -1,6 +1,7 @@
 """Thin async wrapper around the Anthropic Messages API (streaming)."""
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -27,6 +28,15 @@ class ToolCall:
     input: dict[str, Any]
 
 
+_RETRIABLE_STATUS = {408, 409, 429, 500, 502, 503, 504, 529}
+_MAX_RETRIES = 3
+_BACKOFF_BASE = 0.01  # seconds; backoff = base * 2**attempt (test-friendly)
+
+
+class _RetriableError(Exception):
+    """Internal marker for errors that should trigger backoff + retry."""
+
+
 class LLMClient:
     def __init__(
         self, api_key: str, base_url: str, model: str, timeout: float = 60.0
@@ -49,10 +59,24 @@ class LLMClient:
     async def stream_step(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
     ) -> tuple[str, list[ToolCall]]:
-        """One assistant turn: stream SSE, accumulate text + tool_use blocks.
+        """One assistant turn with retry on transient errors."""
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                return await self._stream_step_once(messages, tools)
+            except _RetriableError as e:
+                last_exc = e
+                if attempt < _MAX_RETRIES:
+                    await asyncio.sleep(_BACKOFF_BASE * (2 ** attempt))
+                    continue
+                break
+        raise RetryExhaustedError(
+            f"Exhausted {_MAX_RETRIES + 1} attempts"
+        ) from last_exc
 
-        Returns (text, tool_calls). tool_calls is empty when stop_reason == "end_turn".
-        """
+    async def _stream_step_once(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> tuple[str, list[ToolCall]]:
         body: dict[str, Any] = {
             "model": self.model,
             "max_tokens": 8192,
@@ -63,16 +87,29 @@ class LLMClient:
             body["tools"] = tools
 
         url = f"{self.base_url}/v1/messages"
-        async with self._client.stream("POST", url, json=body) as resp:
+        # Use a non-streaming request to inspect status, then stream
+        req = self._client.build_request("POST", url, json=body)
+        resp = await self._client.send(req, stream=True)
+        try:
             if resp.status_code in (401, 403):
+                await resp.aclose()
                 raise AuthError(f"Auth failed: {resp.status_code}")
+            if resp.status_code in _RETRIABLE_STATUS:
+                await resp.aclose()
+                raise _RetriableError(f"Status {resp.status_code}")
+            if resp.status_code == 400:
+                # Check for context overflow
+                body_bytes = await resp.aread()
+                await resp.aclose()
+                text = body_bytes.decode("utf-8", errors="replace")
+                if "context_length" in text or "too long" in text.lower():
+                    raise ContextOverflowError(text)
+                raise _RetriableError(f"400: {text[:200]}")
             resp.raise_for_status()
 
-            # Accumulate per content-block state
             text_parts: list[str] = []
             tool_calls: list[ToolCall] = []
             current_block: dict[str, Any] | None = None
-            stop_reason: str | None = None
 
             async for line in resp.aiter_lines():
                 if not line or not line.startswith("data: "):
@@ -118,7 +155,7 @@ class LLMClient:
                         )
                     current_block = None
 
-                elif etype == "message_delta":
-                    stop_reason = payload["delta"].get("stop_reason", stop_reason)
-
-        return "".join(text_parts), tool_calls
+            return "".join(text_parts), tool_calls
+        finally:
+            if not resp.is_closed:
+                await resp.aclose()
