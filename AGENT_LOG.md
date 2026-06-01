@@ -21,6 +21,7 @@
 | 7 | 2026-06-01 | Phase 4 实现 Task 5 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 5：write_file tool 5 个测试（creates/overwrites/parent_dirs/traversal/returns_size）+ `_write_file_handler` + `write_file` Tool + `REGISTRY` 扩展（commit 见 #7 详情） |
 | 8 | 2026-06-01 | Phase 4 实现 Task 6 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 6：edit_file tool 5 个测试（single_replacement/not_unique/not_found/replace_all/traversal）+ `_edit_file_handler` + `edit_file` Tool + `REGISTRY` 扩展（commit 见 #8 详情） |
 | 9 | 2026-06-01 | Phase 4 实现 Task 7 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 7：bash tool 6 个测试（runs_command/captures_nonzero_exit/captures_stderr/rejects_path_escape/rejects_traversal_token/respects_workspace_root）+ `_command_escapes_sandbox` + `_bash_handler` + `bash` Tool + `REGISTRY` 完整（commit 见 #9 详情） |
+| 10 | 2026-06-01 | Phase 4 实现 Task 8 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 8：SessionStore 8 个测试（init_creates_schema/create_returns_uuid/get_returns_metadata/get_missing_raises/list_recent_orders_by_updated/append_and_load_roundtrip/append_message_sync_writes_immediately/corrupt_db_raises）+ `CorruptSessionError` + `SessionMeta` + `SessionStore` CRUD（commit 见 #10 详情） |
 
 ---
 
@@ -284,6 +285,36 @@
   - **"完成 test 之前先完成所有 platform 假设"**——Task 4/5/6 的测试在 Windows 上自动通过（没有 subprocess），Task 7 是第一个有 subprocess 的 task，触发 Windows/MSYS 差异。**教训：subagent 接到含 `asyncio.create_subprocess_shell` / `subprocess.run` 的 task 时，第一反应是"在 Windows 上跑会怎样"**——特别是路径断言要复查。
   - **`bash` handler 是 `tools.py` 第一个用 `asyncio` 的 handler**——Task 3 留的"`field` import 暂未用"教训在 Task 7 演化为"asyncio/shlex 必须用"。每个新工具可能引入新 stdlib 模块，subagent 写 import 时的判断标准是"spec 模板用了什么"。**教训：handler 模板是 import 决策的"权威"——如果模板有 `await ... subprocess`，import 列表就一定要有 `asyncio`。**
   - **Plan Task 7 完整 spec 跑通了**——4 个 tool（read/write/edit/bash）全部实现 + 测试 + REGISTRY 填充，Tools 模块 spec 完整。`REGISTRY` 现在含 4 个 tool：`{"read_file", "write_file", "edit_file", "bash"}`。**任务边界**：Task 7 spec 没要求把 `read_file` 的 `cwd` 也改用 `to_thread`（Task 4 handler 也调 `Path.exists` / `Path.read_bytes`），因为 ASYNC240 是 "potential blocking"，纯 stat 在大多数文件系统下不阻塞。**留待 Task 9/10 写 llm.py 时再考虑一致性**——不强行修 Task 4 handler（避免 scope creep）。
+
+---
+
+## #10 — 2026-06-01 — Phase 4：实现 Task 8（SessionStore，SQLite CRUD，TDD）
+
+- **任务**：按 PLAN Task 8 严格 TDD 实现 SessionStore。文件：`src/miniagent/session.py`（新文件，含 `CorruptSessionError` / `SessionMeta` dataclass / `_SCHEMA` / `SessionStore` 类）+ `tests/unit/test_session.py`（新文件，8 个测试）。8 个测试覆盖：(1) `__init__` 创建 schema（messages + sessions 表）；(2) `create()` 返回 36 字符 UUID4；(3) `get()` 返回完整 metadata；(4) `get(missing)` 抛 `KeyError`；(5) `list_recent()` 按 updated_at DESC 排序；(6) `append_message` + `load_messages` roundtrip；(7) `append_message` sync 立即写盘（不是 queue-only）；(8) 损坏 DB 文件抛 `CorruptSessionError`。
+- **触发的 Superpowers 技能**：
+  - `superpowers:test-driven-development`（red→green→refactor，2 轮修复）
+  - `superpowers:subagent-driven-development`（主 agent 直接执行）
+  - `superpowers:systematic-debugging`（用于诊断 `list_recent` 同时间戳问题）
+- **subagent 输出摘要**（主 agent 直接执行）：
+  - **Step 1 RED 证据**：`uv run pytest tests/unit/test_session.py -v` → `ModuleNotFoundError: No module named 'miniagent.session'`，pytest collection error。RED 触发。
+  - **Step 2 GREEN #1**：写 `src/miniagent/session.py`（json / sqlite3 / time / uuid / dataclass / Path / Any / `CorruptSessionError` / `SessionMeta` / `_SCHEMA` / `SessionStore` 6 个方法）。pytest → `7 passed, 1 failed`: `test_list_recent_orders_by_updated` + `test_corrupt_db_raises`。
+  - **Step 3 GREEN #2（list_recent tie-breaker）**：`test_list_recent_orders_by_updated` 失败根因：3 个 session 在同一纳秒内创建，`updated_at` 完全相同，`ORDER BY updated_at DESC` 给出不确定顺序。修复：把 `ORDER BY updated_at DESC` 改为 `ORDER BY updated_at DESC, created_at DESC, id DESC`（3 级 tie-breaker 保证确定性）。
+  - **Step 3 GREEN #3（corrupt DB 检测）**：`test_corrupt_db_raises` 失败根因：spec 给的 `__init__` 模板只把 `_con.executescript(_SCHEMA)` 包在 try/except 里，但 `PRAGMA journal_mode=WAL` 在 schema exec 之前调用，对非 sqlite 文件会抛 `DatabaseError`，没被捕获。修复：把整个 init 块（connect + 2 个 PRAGMA + executescript）统一包在 try/except 里，corrupt 文件直接抛 `CorruptSessionError`。
+  - **Step 3 GREEN #4（test file ruff 修复）**：
+    1. `I001` Import 块未排序 — ruff auto-fix 可解。手动按 ruff 期望重排（already sorted by `isort` 标准：stdlib → 3rd party → 1st party）。
+    2. `F401` `SessionMeta` imported but unused — 测试只用到 `CorruptSessionError` 与 `SessionStore`，删除 `SessionMeta` import（spec 模板里的"演示所有公开符号"在 test 上下文中无意义）。
+  - **Step 4 全量回归**：`uv run pytest` → `36 passed in 0.75s`（28 prior + 8 new），无回归。
+  - **Step 5 lint 零偏离**：`ruff check src tests` → `All checks passed!`；`mypy src` → `Success: no issues found in 5 source files`。
+- **人工干预**（3 项 plan 之外的修复）：
+  - **`list_recent` 3 级 tie-breaker**——同纳秒创建的 session 在 SQLite 排序下无差异，加 `created_at DESC, id DESC` 保证确定性。**教训**："SQLite 时间戳排序"是高频 bug——单线程 fast create 会让 `time.time()` 多次返回相同浮点。任何 `ORDER BY timestamp` 都应加 secondary sort key。
+  - **corrupt DB 检测范围扩大**——spec 模板的 try/except 太窄（只包 schema），实际上 `PRAGMA` 也会触发。**教训**：init 块"统一捕获"是更稳的写法（init 失败 = DB 不可用 = 全部抛 `CorruptSessionError`）。
+  - **删除 `SessionMeta` import**——spec 模板 "demonstrates all public symbols" 的写法在 ruff 严格模式下会报 F401。**教训**：测试 import 应该只 import "测试真正用到的"，不要按 spec 字面照搬 "import 所有 public API" 写法。
+- **学到的教训**：
+  - **Task 3/4/5/6/7 教训"测试必须 monkeypatch env var"在 Task 8 不适用**——SessionStore 是 sync 纯 CRUD，不读 env var。**教训：每 task 检查 spec 是否涉及"外部依赖"**（env var / 文件系统 / 子进程 / 网络）。SessionStore 只依赖文件路径（显式构造参数），所以测试用 `tmp_path` fixture 就够，不需要 monkeypatch。
+  - **"SQLite ORDER BY 时间戳"必须带 tie-breaker**——这是新发现的 subagent 项目级规则。`ORDER BY updated_at DESC` 单独写必出问题（fast create 触发同时间戳）。规则：所有 `ORDER BY <时间戳>` 必须加 `, <second_key> DESC`。**建议未来 subagent 写 SQL 前先 grep "ORDER BY" 检查此规则**。
+  - **"corrupt DB 检测"在 spec 模板是窄 try/except**——spec 写的"只在 executescript 处 try"是字面照搬，扩展到整个 init 块是更稳的实现。**教训：spec 模板是"最小可工作实现"，不是"最稳实现"——subagent 看到 try/except 范围可疑时，主动扩展是合理的 deviation，但要在 AGENT_LOG 记录**。
+  - **Task 8 spec 没要求实现 `AsyncSessionStore`**——那是 Task 8b 的事（依赖 Task 8 的 sync SessionStore 已 merge）。**任务边界**：本次 commit 只含 sync `SessionStore`，不含 async wrapper。`REGISTRY` 等其它模块也没碰。**教训：每 task 的 commit 严格只含本 task spec 的内容，避免 scope creep**。
+  - **SessionStore 是"persistence helper"**——CLAUDE.md / SPEC §4 显式说 "session is a persistence helper, not a 6th core module"。本次实现完全符合"sync CRUD + corruption detection"的 helper 角色，没有掺入 agent loop / LLM / TUI 任何概念。**教训：模块边界是 spec 阶段定的，subagent 不要"方便地"加 method（如 `tail()` / `find()`）——保持最小 CRUD**。
 - **学到的教训**：
   - **spec 写"环境敏感"测试时必须显式 monkeypatch env var**——Task 4 的 handler 从 `os.environ.get("MINI_AGENT_WORKSPACE", ...)` 读 workspace，spec 写测试时漏了 `monkeypatch.setenv`。教训：**所有读 env var 的代码，测试必须显式设 env var**（用 pytest 的 `monkeypatch` fixture，自动 cleanup）。spec 作者容易默认"测试在容器里跑，环境已配好"——但 pytest 用的是 host 进程的环境，不是容器。Task 2/3 的 monkeypatch 教训（"测试资源必须被读取才算测试"）在 Task 4 演化成"**环境依赖必须被注入才算测试**"。
   - **测试文件顶部的 import 失败会让整个 module 收不到任何 item**——本次 RED 输出不是"5 failed"，而是 `Interrupted: 1 error during collection`。这是个**比"5 failed"更强的失败信号**：测试文件根本进不了 runner，因为 import 期就崩了。如果未来看到 collection error，第一反应是看 traceback 顶部的 `in <module>` 那一行——是 import 失败，不是 test 失败。**教训：test module 顶部的 import 越少越好**（"side-effect import"会让 RED 阶段无法精确报告哪个 test 红），但 `read_file` 这种 spec 显式要求的 import 不可避免。
