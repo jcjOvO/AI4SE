@@ -1,4 +1,5 @@
 """Textual TUI app."""
+
 from __future__ import annotations
 
 import asyncio
@@ -91,9 +92,7 @@ class AgentApp(App[None]):
                         continue
                     btype = block.get("type")
                     if btype == "text":
-                        log.write(
-                            f"[bold green]assistant>[/bold green] {block.get('text', '')}"
-                        )
+                        log.write(f"[bold green]assistant>[/bold green] {block.get('text', '')}")
                     elif btype == "tool_use":
                         log.write(
                             f"  [magenta]🔧 {block.get('name')}({block.get('input')})[/magenta]"
@@ -116,9 +115,7 @@ class AgentApp(App[None]):
             self.exit()
             return
         if text == "/reset":
-            self.query_one(RichLog).write(
-                "[italic]Session reset (history kept on disk)[/italic]"
-            )
+            self.query_one(RichLog).write("[italic]Session reset (history kept on disk)[/italic]")
             self.query_one("#input", Input).value = ""
             return
 

@@ -1,4 +1,5 @@
 """Configuration: load + validate TOML, overlay CLI args."""
+
 from __future__ import annotations
 
 import sys
@@ -81,7 +82,7 @@ def load_config(
         print(f"Config validation failed:\n{e}", file=sys.stderr)
         print(
             "\nHint: minimal config.toml example:\n"
-            '  [llm]\n'
+            "  [llm]\n"
             '  api_key = "sk-ant-..."\n'
             '  base_url = "https://api.anthropic.com"\n'
             '  model = "claude-sonnet-4-6"\n',

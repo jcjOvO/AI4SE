@@ -1,4 +1,5 @@
 """Thin async wrapper around the Anthropic Messages API (streaming)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -44,9 +45,7 @@ class _RetriableError(Exception):
 
 
 class LLMClient:
-    def __init__(
-        self, api_key: str, base_url: str, model: str, timeout: float = 60.0
-    ):
+    def __init__(self, api_key: str, base_url: str, model: str, timeout: float = 60.0):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -73,12 +72,10 @@ class LLMClient:
             except _RetriableError as e:
                 last_exc = e
                 if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(_BACKOFF_BASE * (2 ** attempt))
+                    await asyncio.sleep(_BACKOFF_BASE * (2**attempt))
                     continue
                 break
-        raise RetryExhaustedError(
-            f"Exhausted {_MAX_RETRIES + 1} attempts"
-        ) from last_exc
+        raise RetryExhaustedError(f"Exhausted {_MAX_RETRIES + 1} attempts") from last_exc
 
     async def _stream_step_once(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
@@ -120,7 +117,7 @@ class LLMClient:
             async for line in resp.aiter_lines():
                 if not line or not line.startswith("data: "):
                     continue
-                payload = json.loads(line[len("data: "):])
+                payload = json.loads(line[len("data: ") :])
                 etype = payload.get("type")
 
                 if etype == "content_block_start":

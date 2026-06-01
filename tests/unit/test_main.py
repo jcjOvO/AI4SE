@@ -7,9 +7,7 @@ import pytest
 from miniagent.__main__ import parse_args
 
 
-def test_parse_args_defaults(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_parse_args_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.argv", ["miniagent"])
     args = parse_args()
     assert args.resume is None

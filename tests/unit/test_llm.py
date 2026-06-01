@@ -11,9 +11,7 @@ from miniagent.llm import LLMClient
 
 @pytest.fixture
 def llm() -> LLMClient:
-    return LLMClient(
-        api_key="sk-test", base_url="https://api.example.com", model="claude-x"
-    )
+    return LLMClient(api_key="sk-test", base_url="https://api.example.com", model="claude-x")
 
 
 @respx.mock
@@ -81,9 +79,7 @@ async def test_stream_step_returns_text_and_tool_calls(llm: LLMClient) -> None:
         # don't need it.
         del request
         body = "\n".join(f"event: {e['type']}\ndata: {json.dumps(e)}" for e in events)
-        return httpx.Response(
-            200, text=body, headers={"content-type": "text/event-stream"}
-        )
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
 
     respx.post("https://api.example.com/v1/messages").mock(side_effect=sse_response)
 
@@ -142,9 +138,7 @@ async def test_retries_on_429_then_succeeds(llm: LLMClient) -> None:
         side_effect=[
             httpx.Response(429, text="rate limited"),
             httpx.Response(429, text="rate limited"),
-            httpx.Response(
-                200, text=_empty_sse(), headers={"content-type": "text/event-stream"}
-            ),
+            httpx.Response(200, text=_empty_sse(), headers={"content-type": "text/event-stream"}),
         ]
     )
     text, _ = await llm.stream_step(messages=[{"role": "user", "content": "x"}], tools=[])
@@ -161,6 +155,7 @@ async def test_no_retry_on_401(llm: LLMClient) -> None:
         await llm.stream_step(messages=[{"role": "user", "content": "x"}], tools=[])
     # Should NOT be RetryExhausted; should be AuthError
     from miniagent.llm import AuthError
+
     assert isinstance(exc.value, AuthError)
 
 
@@ -170,5 +165,6 @@ async def test_retry_exhausted_after_4_attempts(llm: LLMClient) -> None:
         return_value=httpx.Response(500, text="server error")
     )
     from miniagent.llm import RetryExhaustedError
+
     with pytest.raises(RetryExhaustedError):
         await llm.stream_step(messages=[{"role": "user", "content": "x"}], tools=[])

@@ -2,21 +2,33 @@
 
 Used by the E2E test to verify the agent loop end-to-end without a real key.
 """
+
 from __future__ import annotations
 
-import json
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-
-SSE = (
-    'event: message_start\ndata: {"type":"message_start","message":{"id":"m","role":"assistant","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n'
-    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n'
-    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello from mock LLM!"}}\n\n'
-    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n'
-    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n'
-    'event: message_stop\ndata: {"type":"message_stop"}\n\n'
-)
+# Each event is one logical "event: ...\ndata: ...\n\n" record. We keep
+# them as separate string literals and join with empty separator so that
+# each line stays short and ruff's line-length check (E501) is satisfied.
+_SSE_EVENTS = [
+    "event: message_start\n"
+    'data: {"type":"message_start","message":{'
+    '"id":"m","role":"assistant","content":[],'
+    '"stop_reason":null,"usage":{'
+    '"input_tokens":1,"output_tokens":0}}}\n\n',
+    "event: content_block_start\n"
+    'data: {"type":"content_block_start","index":0,'
+    '"content_block":{"type":"text","text":""}}\n\n',
+    "event: content_block_delta\n"
+    'data: {"type":"content_block_delta","index":0,'
+    '"delta":{"type":"text_delta",'
+    '"text":"Hello from mock LLM!"}}\n\n',
+    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n',
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+]
+SSE = "".join(_SSE_EVENTS)
 
 
 class Handler(BaseHTTPRequestHandler):

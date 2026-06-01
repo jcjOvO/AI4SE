@@ -10,7 +10,7 @@ from miniagent.config import Config, load_config
 def test_loads_minimal_user_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg_file = tmp_path / "config.toml"
     cfg_file.write_text(
-        '[llm]\n'
+        "[llm]\n"
         'api_key = "sk-ant-test"\n'
         'base_url = "https://api.anthropic.com"\n'
         'model = "claude-sonnet-4-6"\n'
@@ -43,8 +43,10 @@ def test_missing_api_key_exits(tmp_path: Path, capsys: pytest.CaptureFixture[str
 def test_cli_override_wins(tmp_path: Path) -> None:
     cfg_file = tmp_path / "config.toml"
     cfg_file.write_text('[llm]\napi_key = "k1"\nmodel = "m1"\n')
-    cfg = load_config(user_path=cfg_file, project_path=tmp_path / "missing",
-                      cli_overrides={"llm": {"model": "m2"}})
+    cfg = load_config(
+        user_path=cfg_file,
+        project_path=tmp_path / "missing",
+        cli_overrides={"llm": {"model": "m2"}},
+    )
     assert cfg.llm.api_key == "k1"
     assert cfg.llm.model == "m2"
-

@@ -18,9 +18,7 @@ def test_init_creates_schema(tmp_path: Path) -> None:
     db = tmp_path / "s.db"
     SessionStore(db)
     con = sqlite3.connect(db)
-    rows = con.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    ).fetchall()
+    rows = con.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
     assert ("messages",) in rows
     assert ("sessions",) in rows
     con.close()

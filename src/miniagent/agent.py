@@ -1,4 +1,5 @@
 """Agent loop: pure async function emitting events."""
+
 from __future__ import annotations
 
 import asyncio
@@ -112,13 +113,15 @@ async def run(
             for call in tool_calls:
                 on_event(ToolCallStart(call_id=call.id, name=call.name, args=call.input))
                 result = await tools.execute(call.name, call.input)
-                on_event(ToolCallResult(
-                    call_id=call.id,
-                    name=call.name,
-                    ok=not result.is_error,
-                    output=result.output,
-                    error=result.error,
-                ))
+                on_event(
+                    ToolCallResult(
+                        call_id=call.id,
+                        name=call.name,
+                        ok=not result.is_error,
+                        output=result.output,
+                        error=result.error,
+                    )
+                )
                 tool_msg = _to_tool_result_message(call.id, result)
                 messages.append(tool_msg)
                 if session and session_id:

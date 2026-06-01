@@ -98,18 +98,14 @@ async def test_read_file_binary(tmp_workspace: Path, monkeypatch: pytest.MonkeyP
 # ---------------------------------------------------------------------------
 
 
-async def test_write_file_creates(
-    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_write_file_creates(tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
     r = await write_file.handler({"path": "out.txt", "content": "hi\n"})
     assert r.error is None
     assert (tmp_workspace / "out.txt").read_text() == "hi\n"
 
 
-async def test_write_file_overwrites(
-    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_write_file_overwrites(tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
     (tmp_workspace / "f.txt").write_text("old")
     r = await write_file.handler({"path": "f.txt", "content": "new"})
@@ -154,11 +150,13 @@ async def test_edit_file_single_replacement(
 ) -> None:
     monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
     (tmp_workspace / "f.txt").write_text("hello world\nhello there\n")
-    r = await edit_file.handler({
-        "path": "f.txt",
-        "old_string": "hello world",
-        "new_string": "hi world",
-    })
+    r = await edit_file.handler(
+        {
+            "path": "f.txt",
+            "old_string": "hello world",
+            "new_string": "hi world",
+        }
+    )
     assert r.error is None
     assert (tmp_workspace / "f.txt").read_text() == "hi world\nhello there\n"
 
@@ -168,9 +166,13 @@ async def test_edit_file_not_unique_errors(
 ) -> None:
     monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
     (tmp_workspace / "f.txt").write_text("aaa\naaa\n")
-    r = await edit_file.handler({
-        "path": "f.txt", "old_string": "aaa", "new_string": "bbb",
-    })
+    r = await edit_file.handler(
+        {
+            "path": "f.txt",
+            "old_string": "aaa",
+            "new_string": "bbb",
+        }
+    )
     assert r.is_error
     assert "not unique" in r.error
     assert (tmp_workspace / "f.txt").read_text() == "aaa\naaa\n"  # unchanged
@@ -181,21 +183,28 @@ async def test_edit_file_not_found_errors(
 ) -> None:
     monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
     (tmp_workspace / "f.txt").write_text("hello")
-    r = await edit_file.handler({
-        "path": "f.txt", "old_string": "goodbye", "new_string": "hi",
-    })
+    r = await edit_file.handler(
+        {
+            "path": "f.txt",
+            "old_string": "goodbye",
+            "new_string": "hi",
+        }
+    )
     assert r.is_error
     assert "not found" in r.error
 
 
-async def test_edit_file_replace_all(
-    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_edit_file_replace_all(tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
     (tmp_workspace / "f.txt").write_text("aaa\naaa\n")
-    r = await edit_file.handler({
-        "path": "f.txt", "old_string": "aaa", "new_string": "bbb", "replace_all": True,
-    })
+    r = await edit_file.handler(
+        {
+            "path": "f.txt",
+            "old_string": "aaa",
+            "new_string": "bbb",
+            "replace_all": True,
+        }
+    )
     assert r.error is None
     assert "2 replacements" in r.output
     assert (tmp_workspace / "f.txt").read_text() == "bbb\nbbb\n"
@@ -205,9 +214,13 @@ async def test_edit_file_rejects_traversal(
     tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
-    r = await edit_file.handler({
-        "path": "../escape.txt", "old_string": "x", "new_string": "y",
-    })
+    r = await edit_file.handler(
+        {
+            "path": "../escape.txt",
+            "old_string": "x",
+            "new_string": "y",
+        }
+    )
     assert r.is_error
     assert "escapes sandbox" in r.error
 
@@ -217,9 +230,7 @@ async def test_edit_file_rejects_traversal(
 # ---------------------------------------------------------------------------
 
 
-async def test_bash_runs_command(
-    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_bash_runs_command(tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
     r = await bash.handler({"command": "echo hello"})
     assert r.error is None
@@ -237,9 +248,7 @@ async def test_bash_captures_nonzero_exit(
     assert "exit: 7" in r.output
 
 
-async def test_bash_captures_stderr(
-    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_bash_captures_stderr(tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
     r = await bash.handler({"command": "echo oops >&2; echo ok"})
     assert r.error is None

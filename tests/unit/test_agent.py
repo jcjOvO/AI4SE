@@ -80,10 +80,12 @@ async def test_run_executes_tool_and_reflows_result() -> None:
     tool = Tool(name="read_file", description="r", input_schema={}, handler=fake_read)
     tools = FakeTools(by_name={"read_file": tool})
 
-    llm = FakeLLM(responses=[
-        ("Let me read it.", [FakeToolCall(id="c1", name="read_file", input={"path": "foo"})]),
-        ("Done.", []),
-    ])
+    llm = FakeLLM(
+        responses=[
+            ("Let me read it.", [FakeToolCall(id="c1", name="read_file", input={"path": "foo"})]),
+            ("Done.", []),
+        ]
+    )
     events: list[Event] = []
 
     msgs = await run(
@@ -96,7 +98,11 @@ async def test_run_executes_tool_and_reflows_result() -> None:
 
     # Should see: AssistantDelta, ToolCallStart, ToolCallResult, AssistantDelta, EndTurn
     assert [type(e) for e in events] == [
-        AssistantDelta, ToolCallStart, ToolCallResult, AssistantDelta, EndTurn,
+        AssistantDelta,
+        ToolCallStart,
+        ToolCallResult,
+        AssistantDelta,
+        EndTurn,
     ]
     assert events[2].output == "contents of foo"  # type: ignore[union-attr]
 
@@ -108,10 +114,12 @@ async def test_run_reflows_tool_error_back_to_llm() -> None:
     tool = Tool(name="read_file", description="r", input_schema={}, handler=bad_read)
     tools = FakeTools(by_name={"read_file": tool})
 
-    llm = FakeLLM(responses=[
-        ("Reading.", [FakeToolCall(id="c1", name="read_file", input={"path": "foo"})]),
-        ("Sorry, file missing.", []),
-    ])
+    llm = FakeLLM(
+        responses=[
+            ("Reading.", [FakeToolCall(id="c1", name="read_file", input={"path": "foo"})]),
+            ("Sorry, file missing.", []),
+        ]
+    )
     events: list[Event] = []
 
     await run(

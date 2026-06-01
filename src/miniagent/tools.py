@@ -1,4 +1,5 @@
 """Tool registry and the 4 built-in tools."""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +14,7 @@ from typing import Any
 @dataclass
 class ToolResult:
     """Result of a tool invocation. Tool errors go in `error`, not exceptions."""
+
     output: str = ""
     error: str | None = None
 
@@ -182,9 +184,7 @@ async def _edit_file_handler(args: dict[str, Any]) -> ToolResult:
         n = 1
 
     path.write_text(new_text, encoding="utf-8")
-    return ToolResult(
-        output=f"Edited {args['path']} ({n} replacement{'s' if n != 1 else ''})"
-    )
+    return ToolResult(output=f"Edited {args['path']} ({n} replacement{'s' if n != 1 else ''})")
 
 
 edit_file = Tool(
@@ -223,18 +223,12 @@ def _command_escapes_sandbox(command: str, root_resolved: Path) -> str | None:
     except ValueError:
         return None  # let the shell fail; not a sandbox concern
     # Strip shell metachars
-    file_like = [
-        t for t in tokens if not t.startswith(("-", "$", ";")) and "=" not in t
-    ]
+    file_like = [t for t in tokens if not t.startswith(("-", "$", ";")) and "=" not in t]
     for tok in file_like:
         # skip obvious non-paths
         if tok in {"&&", "||", "|", ">", "<", ">>", "<<<", "2>&1"}:
             continue
-        if (
-            tok.startswith(("./", "/", "../"))
-            or "/" in tok
-            or tok in {".", ".."}
-        ):
+        if tok.startswith(("./", "/", "../")) or "/" in tok or tok in {".", ".."}:
             try:
                 if Path(tok).is_absolute():
                     candidate = Path(tok).resolve()
@@ -256,9 +250,7 @@ async def _bash_handler(args: dict[str, Any]) -> ToolResult:
     root_resolved = await asyncio.to_thread(root.resolve)
     escaper = _command_escapes_sandbox(command, root_resolved)
     if escaper is not None:
-        return ToolResult(
-            error=f"Path escapes sandbox: '{escaper}' is outside {root_resolved}"
-        )
+        return ToolResult(error=f"Path escapes sandbox: '{escaper}' is outside {root_resolved}")
 
     try:
         proc = await asyncio.create_subprocess_shell(
@@ -268,9 +260,7 @@ async def _bash_handler(args: dict[str, Any]) -> ToolResult:
             cwd=str(root_resolved),
         )
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
-            )
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
             proc.kill()
             await proc.wait()

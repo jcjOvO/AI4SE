@@ -3,6 +3,7 @@
 This is the *unit-level* E2E (no Docker, no TUI). The Docker-based E2E
 (constructing a container, sending keys, reading TUI) is manual.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -50,8 +51,6 @@ async def test_agent_against_mock_llm(mock_server: str, tmp_path: Path) -> None:
         on_event=events.append,
     )
     assert msgs
-    assert any(
-        isinstance(e, AssistantDelta) and "Hello from mock" in e.text for e in events
-    )
+    assert any(isinstance(e, AssistantDelta) and "Hello from mock" in e.text for e in events)
     assert any(isinstance(e, EndTurn) for e in events)
     await llm.close()

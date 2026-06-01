@@ -1,4 +1,5 @@
 """Entry point: python -m miniagent"""
+
 from __future__ import annotations
 
 import argparse

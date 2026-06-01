@@ -1,4 +1,5 @@
 """SQLite-backed session storage."""
+
 from __future__ import annotations
 
 import asyncio
@@ -88,10 +89,7 @@ class SessionStore:
             "ORDER BY updated_at DESC, rowid DESC LIMIT ?",
             (limit,),
         ).fetchall()
-        return [
-            SessionMeta(id=r[0], title=r[1], created_at=r[2], updated_at=r[3])
-            for r in rows
-        ]
+        return [SessionMeta(id=r[0], title=r[1], created_at=r[2], updated_at=r[3]) for r in rows]
 
     def append_message(self, session_id: str, msg: dict[str, Any]) -> None:
         # seq: max + 1 (or 1 if empty)
