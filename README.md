@@ -44,14 +44,41 @@
 
 ---
 
-## 运行（待实现）
+## 运行
 
-> 待 Phase 4 实现完成后补充。
+### Quick start
 
-- 本地开发：`make dev` 或等价命令
-- 跑测试：`make test`
-- Docker 构建：`docker build -t <name> .`
-- Docker 运行：`docker run -p <port>:<port> <name>`
+```bash
+# 1. Configure
+mkdir -p ~/.config/mini-agent
+cat > ~/.config/mini-agent/config.toml <<'EOF'
+[llm]
+api_key = "sk-ant-..."
+base_url = "https://api.anthropic.com"
+model = "claude-sonnet-4-6"
+EOF
+
+# 2. Run (uv)
+uv sync --extra dev
+uv run miniagent
+
+# Or via Docker
+make docker-build
+docker run -it --rm -v $PWD:/workspace -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY mini-agent
+```
+
+### Useful commands
+
+| Command | What it does |
+|---|---|
+| `make dev` | Install deps + launch TUI |
+| `make test` | Run unit + integration tests |
+| `make lint` | ruff check + format check |
+| `make type` | mypy |
+| `make docker-build` | Build Docker image |
+| `make docker-run` | Run TUI in container |
+| `miniagent --resume <id>` | Resume a previous session |
+| `miniagent --list` | Show recent sessions |
 
 ---
 
