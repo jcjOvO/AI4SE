@@ -88,17 +88,24 @@
   async def run(messages, on_event, session=None):
       while True:
           text, tool_calls = await llm.stream_step(messages, tools_schema)
+          assistant_msg = {"role": "assistant", "content": text, "tool_calls": tool_calls}
           on_event(AssistantDelta(text))
+          messages.append(assistant_msg)
           if session: session.append_message(assistant_msg)
           if not tool_calls:
               on_event(EndTurn(text))
               return messages
           for call in tool_calls:
+              on_event(ToolCallStart(call.id, call.name, call.input))
               result = await tools.execute(call.name, call.input)
-              on_event(ToolCallResult(call, result))
-              if session: session.append_message(tool_result_msg)
+              on_event(ToolCallResult(call.id, call.name, result))
+              tool_result_msg = {"role": "tool", "tool_call_id": call.id, "content": result.output or result.error}
               messages.append(tool_result_msg)
+              if session: session.append_message(tool_result_msg)
   ```
+  注意：`session.append_message` 是**同步**的（内部投递到 `asyncio.Queue`，由后台 task 异步 flush 到 SQLite），不会阻塞 agent 循环的 token 流。
+
+  **关于 message 格式**：上例的 `assistant_msg` 是为可读性简化的内部表示。`messages` 列表全程保持 **Anthropic Messages API 原生格式** —— `assistant_msg.content` 实际是 blocks 数组（`[{"type": "text", "text": ...}, {"type": "tool_use", "id": ..., "name": ..., "input": ...}]`），`tool_result_msg.content` 是字符串或文本块。`session.append_message` 入库前 agent.py 负责这个序列化；`llm.stream_step` 入参/出参也遵循同一格式。
 - **边界**：唯一退出路径是 `end_turn`（LLM 返回无 tool_use）或用户 `Ctrl+C` 或不可恢复错误
 - **错误处理**：
   - 工具返回 `is_error=True`：不中断循环，把 error 字段作为 `tool_result` 回传 LLM
@@ -218,15 +225,15 @@
 │              │ ◀──── events ─── │                  │
 │ - chat log   │   (token, tool,  │  - call LLM      │
 │ - input box  │    tool_result)  │  - exec tools    │
-│ - status bar │                  │  - save session  │
+│ - status bar │                  │  - emit events   │
 └──────────────┘                  └────────┬─────────┘
                                            │
                             ┌──────────────┼──────────────┐
                             ▼              ▼              ▼
-                       ┌────────┐    ┌────────┐    ┌──────────┐
-                       │  LLM   │    │ Tools  │    │ Session  │
-                       │ client │    │ (4个)  │    │(SQLite)  │
-                       └────────┘    └────────┘    └──────────┘
+                       ┌────────┐    ┌────────┐    ┌──────────────┐
+                       │  LLM   │    │ Tools  │    │  Session     │
+                       │ client │    │ (4个)  │    │ (SQLite 辅助)│
+                       └────────┘    └────────┘    └──────────────┘
                             │
                             ▼
                    ┌──────────────────┐
@@ -235,6 +242,8 @@
                    │  可指向代理)      │
                    └──────────────────┘
 ```
+
+**模块划分说明**：本项目有 **5 个核心功能模块**（`config` / `llm` / `tools` / `agent` / `tui`），加 1 个**持久化辅助层**（`session`）。`session` 不构成独立"功能"，而是 agent 循环的镜像日志，对应课程要求里的 3–5 个核心功能模块由前 5 个满足。
 
 ### 5.2 数据流
 
@@ -351,9 +360,9 @@ class SessionStore:
     def create(self) -> str: ...  # 返回 session_id
     def get(self, session_id: str) -> SessionMeta: ...
     def list_recent(self, limit: int = 20) -> list[SessionMeta]: ...
-    async def append_message(self, session_id: str, msg: dict) -> None: ...
+    def append_message(self, session_id: str, msg: dict) -> None: ...   # 同步：投递到内部 queue，flush task 异步落盘
     def load_messages(self, session_id: str) -> list[dict]: ...
-    async def close(self) -> None: ...
+    async def close(self) -> None: ...   # 排空 queue 后关闭连接
 ```
 
 ### 7.6 `tui.py`（CLI 接口）
