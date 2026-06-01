@@ -53,6 +53,7 @@ class AgentApp(App[None]):
         session: Any,
         session_id: str,
         model_name: str = "claude-x",
+        initial_messages: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__()
         self.llm = llm
@@ -60,7 +61,7 @@ class AgentApp(App[None]):
         self.session = session
         self.session_id = session_id
         self.model_name = model_name
-        self._current_assistant_text: str = ""
+        self._initial_messages: list[dict[str, Any]] = list(initial_messages or [])
         self._busy: bool = False
 
     def compose(self) -> ComposeResult:
@@ -74,9 +75,36 @@ class AgentApp(App[None]):
 
     def on_mount(self) -> None:
         self.query_one("#input", Input).focus()
-        self.query_one(RichLog).write(
-            "[bold]Welcome to miniagent. Type a message to begin.[/bold]"
-        )
+        log = self.query_one(RichLog)
+        log.write("[bold]Welcome to miniagent. Type a message to begin.[/bold]")
+        # Replay prior session history (if --resume) so the user sees context.
+        for msg in self._initial_messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                # User message
+                if msg.get("role") == "user":
+                    log.write(f"[bold cyan]you>[/bold cyan] {content}")
+            elif isinstance(content, list):
+                # Anthropic native message: list of content blocks
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    btype = block.get("type")
+                    if btype == "text":
+                        log.write(
+                            f"[bold green]assistant>[/bold green] {block.get('text', '')}"
+                        )
+                    elif btype == "tool_use":
+                        log.write(
+                            f"  [magenta]🔧 {block.get('name')}({block.get('input')})[/magenta]"
+                        )
+                    elif btype == "tool_result":
+                        # tool_result blocks arrive on user-role messages
+                        payload = block.get("content", "")
+                        ok = not block.get("is_error", False)
+                        mark = "✓" if ok else "✗"
+                        color = "green" if ok else "red"
+                        log.write(f"  [{color}]{mark} {payload}[/{color}]")
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if self._busy:
@@ -99,13 +127,16 @@ class AgentApp(App[None]):
         self.query_one("#input", Input).value = ""
         self._set_status("thinking...")
         self._busy = True
-        self._current_assistant_text = ""
 
         # Hand off to agent in a background task
         asyncio.create_task(self._run_agent(text))
 
     async def _run_agent(self, user_text: str) -> None:
-        messages: list[dict[str, Any]] = [{"role": "user", "content": user_text}]
+        # Start with any prior history (from --resume), then append the
+        # new user turn. The agent loop appends assistant + tool_result
+        # messages as it runs.
+        messages: list[dict[str, Any]] = list(self._initial_messages)
+        messages.append({"role": "user", "content": user_text})
 
         def emit(event: Event) -> None:
             self._render_event(event)
@@ -130,12 +161,8 @@ class AgentApp(App[None]):
     def _render_event(self, event: Event) -> None:
         log = self.query_one(RichLog)
         if isinstance(event, AssistantDelta):
-            if not self._current_assistant_text:
-                log.write("[bold green]assistant>[/bold green] ")
-            self._current_assistant_text += event.text
-            # The spec's `write(prefix); accumulate text` never actually
-            # renders the text. Write each delta so the log shows the
-            # streamed content (newline-per-delta is acceptable for v1).
+            log.write("[bold green]assistant>[/bold green] ")
+            # Write each delta (newline-per-delta is acceptable for v1).
             log.write(event.text)
         elif isinstance(event, ToolCallStart):
             log.write(f"  [magenta]🔧 {event.name}({event.args})[/magenta]")

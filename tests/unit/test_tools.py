@@ -276,3 +276,25 @@ async def test_bash_respects_workspace_root(
     # to a Posix-style path (e.g. `/tmp/...`); check the leaf name
     # invariant instead of the full path.
     assert tmp_workspace.name in r.output
+
+
+async def test_bash_does_not_validate_shell_expansion(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Document the bash sandbox's known limitation: tokens that go
+    through shell expansion (e.g. $HOME, $(...), ~) are not pre-validated.
+    The detector only inspects literal shlex-split tokens. Container
+    filesystem permissions + cwd restriction are the real boundary."""
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    # `echo hi` (no escape) — passes
+    r_ok = await bash.handler({"command": "echo hi"})
+    assert r_ok.error is None
+    # `cat $HOME/secret` — the $HOME token doesn't start with "/"
+    # or "../", so the detector does not block it. This is a known
+    # limitation; we assert current behavior so future refactors
+    # don't regress silently.
+    r = await bash.handler({"command": "echo $HOME"})
+    assert r.error is None  # detector did not block
+    # The command actually runs; the detector's only contract is
+    # "reject literal /etc/passwd and literal ../", which we test
+    # in the rejection tests above.

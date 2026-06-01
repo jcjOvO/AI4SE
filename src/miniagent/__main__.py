@@ -10,24 +10,8 @@ from typing import Any
 
 from miniagent.config import load_config
 from miniagent.llm import LLMClient
-from miniagent.session import SessionStore
-from miniagent.tools import all_schemas
-from miniagent.tools import execute as tools_execute
-
-
-class _ToolsAdapter:
-    """Wrap the module-level tools REGISTRY + helpers as an object the
-    agent loop can consume via `tools.all_schemas()` / `await tools.execute(...)`.
-
-    The agent protocol expects an object, not a raw dict, because the loop
-    calls `tools.all_schemas()` to build the LLM tool schema payload.
-    """
-
-    def all_schemas(self) -> list[dict[str, Any]]:
-        return all_schemas()
-
-    async def execute(self, name: str, args: dict[str, Any]) -> Any:
-        return await tools_execute(name, args)
+from miniagent.session import AsyncSessionStore, SessionStore
+from miniagent.tools import tools as tools_ns
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -73,10 +57,12 @@ def main(argv: list[str] | None = None) -> int:
         store.close()
         return 0
 
+    initial_messages: list[dict[str, Any]] = []
     if args.resume:
         session_id = args.resume
         try:
             store.get(session_id)
+            initial_messages = store.load_messages(session_id)
         except KeyError:
             print(f"No session with id {session_id!r}", file=sys.stderr)
             store.close()
@@ -91,19 +77,27 @@ def main(argv: list[str] | None = None) -> int:
         model=config.llm.model,
     )
 
+    # AsyncSessionStore wraps the sync store so the agent loop never
+    # blocks the TUI event loop on disk I/O (SPEC §3.5). It owns the
+    # background flusher; we close it before the sync store.
+    async_session: AsyncSessionStore = AsyncSessionStore(store)
+
     # Lazy import: textual is heavy
     from miniagent.tui import AgentApp
 
     app = AgentApp(
         llm=llm,
-        tools=_ToolsAdapter(),
-        session=store,
+        tools=tools_ns,
+        session=async_session,
         session_id=session_id,
         model_name=config.llm.model,
+        initial_messages=initial_messages,
     )
     try:
         app.run()
     finally:
+        # Drain the async session queue before closing SQLite.
+        asyncio.run(async_session.close())
         store.close()
         asyncio.run(llm.close())
     return 0

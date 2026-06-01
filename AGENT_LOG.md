@@ -32,6 +32,7 @@
 | 18 | 2026-06-01 | Phase 4 实现 Task 15 | — | 主 agent 直接执行 Task 15：Dockerfile（python:3.12-slim 多阶段 + uv 安装 + non-root user）+ docker-compose.yml（4 env vars + volume mount + tty/stdin_open）。跳过 Step 3/4 (docker build/run)，环境无 Docker daemon——属 Phase 6 验证项。 |
 | 19 | 2026-06-01 | Phase 4 实现 Task 18 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` + `superpowers:systematic-debugging` | 主 agent 直接执行 Task 18：E2E mock LLM（1 个测试 `test_agent_against_mock_llm`）+ 修 `_main__` 真实 bug（agent.run 期望 tools 对象，REGISTRY 是 dict）+ `_ToolsAdapter` 适配器 + 52 passed（commit 见 #19 详情） |
 | 20 | 2026-06-01 | Phase 4 收尾 | `superpowers:finishing-a-development-branch` | 主 agent 整合 Phase 4 全部 19 个 task 的 AGENT_LOG / plan 勾选 / git log 验证；下个阶段 = `finishing-a-development-branch`（合并到 main） |
+| 21 | 2026-06-01 | Phase 4 code review fixes | `superpowers:requesting-code-review` | 主 agent 派发 code-reviewer subagent 审 Phase 4 diff（b851415..03ddfa3，21 files / 2338 insertions）；修复 6 项 Important issues：AsyncSessionStore wire-up / _BACKOFF_BASE env var / --resume load_messages + history replay / bash sandbox 限制文档 + bypass test / `tools` singleton 替换 _ToolsAdapter / 删除 TUI 死代码 _current_assistant_text（commit 见 #21 详情） |
 
 ---
 
@@ -606,6 +607,48 @@
     - **Phase 6**—— Docker 实际构建 + 真 LLM 手动测试 + README 截图。
     - **Phase 7**—— `REFLECTION.md`（项目复盘 + process evidence 总结）。
   - **Phase 4 总耗时**：19 个 task × 约 5-15 分钟 = ~2-3 小时 effective work（实际 wall clock 包括 lint 修复、spec 偏差调试、AGENT_LOG 写记录，~6-8 小时）。**TDD 严格度的代价是"每个 task 多 30%"，但回报是"接近零回归"**。
+
+---
+
+## #21 — 2026-06-01 — Phase 4 code review fixes（修复 6 项 Important issues）
+
+- **任务**：Code reviewer subagent 审 Phase 4 全 diff（b851415..03ddfa3，21 files / 2338 行）。Reviewer 给出 3 Critical（无）+ 7 Important + 9 Minor 评估。**结论**："No — with the 3 Important issues fixed, this is ready." 修复 6 项可立即 action 的 Important issues（1 项待后续）：AsyncSessionStore wire-up / _BACKOFF_BASE env var / --resume history / bash 限制文档 / `tools` singleton / TUI 死代码。
+- **触发的 Superpowers 技能**：
+  - `superpowers:requesting-code-review`（派发 reviewer subagent）
+  - `superpowers:verification-before-completion`（修复后跑全套 pytest+ruff+mypy 验证）
+- **Code reviewer 关键发现摘要**：
+  - **3 项 Critical**（无）✓
+  - **Important #1**：`AsyncSessionStore` 是死代码——T8b 写了但 `__main__.py` 没 wire。SPEC §3.5 承诺"agent loop 不阻塞磁盘"被违反。
+  - **Important #2**：`_BACKOFF_BASE = 0.01` 生产环境太激进——10ms/20ms/40ms 重试无法尊重 `retry-after`。
+  - **Important #3**：`--resume` 不真的 resume——`store.load_messages` 已实现但无 production caller，UX 中心功能失效。
+  - **Important #4**：bash path escape detector 可被 shell expansion 绕过（`$HOME`、`~`、`$(...)`），当前测试只覆盖简单 case。
+  - **Important #5**：`_ToolsAdapter` 在 `__main__.py` 和 e2e 重复——应改为 `tools.py` 单例。
+  - **Important #6**：`TUI._current_assistant_text` 死代码——accumulate 但从未使用。
+  - **Important #7**：CI 跑 ruff 但不跑 mypy on tests——一致性。
+- **subagent 输出摘要**（主 agent 修复 6 项）：
+  - **Fix #5+1 (`tools` singleton + AsyncSessionStore wire)**：在 `src/miniagent/tools.py` 末尾加 `class _ToolsNamespace` (exposing `all_schemas` / `execute` as staticmethods) + `tools = _ToolsNamespace()` 单例。`__main__.py` 改为 `from miniagent.tools import tools as tools_ns` + `async_session = AsyncSessionStore(store)` + `session=async_session` to AgentApp + `finally: asyncio.run(async_session.close())` 排空 queue 后才 close sync store。
+  - **Fix #2 (`_BACKOFF_BASE` env var)**：`llm.py` 加 `import os` + 改 `_BACKOFF_BASE = float(os.environ.get("MINI_AGENT_LLM_BACKOFF_BASE", "1.0"))`。生产 default 1.0s（尊重 retry-after），测试可通过 env var 或 monkeypatch 调小。
+  - **Fix #3 (`--resume` history)**：TUI `AgentApp.__init__` 加 `initial_messages: list[dict[str, Any]] | None = None` 参数 + `on_mount` 渲染历史（user / assistant text / tool_use / tool_result 4 种 block 类型）+ `_run_agent` 用 `list(self._initial_messages)` 初始化 messages。`__main__.py` 在 `--resume` 路径调 `store.load_messages(session_id)` 并传给 `AgentApp`。
+  - **Fix #4 (bash 限制文档 + bypass test)**：`bash` Tool description 显式说明"$HOME / ~ / $(...) 不预校验，靠 container fs 权限"。`test_bash_does_not_validate_shell_expansion` 断言当前行为（`echo $HOME` 不被 detector 拦截），防 future regression。
+  - **Fix #6 (TUI 死代码)**：删除 `self._current_assistant_text: str = ""` 字段。`_render_event` 对 `AssistantDelta` 改为"prefix + 立即写 text"（不再 accumulate）。
+  - **e2e test 简化**：删除 `tests/e2e/test_docker_smoke.py` 的 `_ToolsAdapter` 类（重复代码），改用 `from miniagent.tools import tools`。
+  - **新测试 2 个**：(1) `test_bash_does_not_validate_shell_expansion`；(2) `test_initial_messages_replayed_on_mount`（TUI 集成测试，验证 `--resume` 渲染历史）。
+- **修复后验证**：
+  - `uv run pytest` → **54 passed in 12.46s**（52 prior + 2 new）
+  - `uv run ruff check src tests` → `All checks passed!`
+  - `uv run mypy src` → `Success: no issues found in 8 source files`
+  - `uv run miniagent --help` → 4 个 CLI 选项正确
+- **人工干预**（1 项 plan 之外的修复）：
+  - **`staticmethod` 不需要 `# type: ignore`**——最初加 `staticmethod(all_schemas)  # type: ignore[assignment]` 是防御性，但 mypy 实际不需要。删除后 mypy 通过。**教训**：`# type: ignore` 是 "工具在帮我"信号，不是 "我有疑虑"信号——加之前先看 mypy 报不报错。
+  - **TUI `on_mount` 渲染历史的"elif 是 dead code"bug**——第一版写了 `if isinstance(block, dict):` + `elif isinstance(block, dict) and ...`：第二个 elif 永远 false（因为第一个 if 已经 narrowed block）。修复：把 `elif isinstance(block, dict) and block.get("type") == "tool_result":` 改为 `elif btype == "tool_result":`。**教训**："先 isinstance 缩窄再 branch" 是 Python 模式，但 elif 不能再加 isinstance 断言（缩窄已生效）。
+- **学到的教训**：
+  - **Code review 在 Phase 末"集中修" vs "per-task 修"**——本次是 Phase 4 完整 19 task 完成后一次性 review。**6 项 Important 几乎全部是"wire-up"或"集成"问题**（不是"算法"或"逻辑"问题），如果 per-task review 反而难发现（每 task 局部 OK）。**教训**：code review 适合在"完整 feature 集成后"做一次，发现"模块间契约不一致"类问题。
+  - **AsyncSessionStore 死代码是"spec 显式允许" + "subagent 跳过"的累积**——T8b spec 说 "wire to TUI in step 5/6/7"（但 T8b commit 时 TUI 还不存在），T13 spec 没显式提 AsyncSessionStore wire-up。**2 个 task 都"正确"按 spec 执行，但 spec 之间有 gap**。**教训**：跨 task 的集成步骤需要在每个 task 末尾的"未完成任务清单"中显式跟踪。
+  - **"_BACKOFF_BASE = 0.01 是测试需要" vs "生产需要 1.0"**——这个 tension 我在 AGENT_LOG #13 记录了但没解决。**Code reviewer 显式指出"env var 是正解"**。**教训**：当一个常量同时被测试和生产代码读，应该用 env var（test 改 env / monkeypatch，生产读默认）。**这个 pattern 应该成为项目级规则**："all `BACKOFF`/`TIMEOUT`/`MAX_RETRIES` 类的常量必须可 env 配置"。
+  - **`tools` singleton 是 Python 常见 idiom**——`from module import tools; tools.method()` 是 Django/Flask 等大项目的标准 pattern。本次重构把 `all_schemas` + `execute` 提升为 singleton，删除 `__main__.py` 与 e2e 的重复 `_ToolsAdapter` 类。**教训**：写"模块作为命名空间"时显式提供 singleton，比让 caller 拼 adapter 更优雅。
+  - **"`AgentApp` 加 `initial_messages` 参数"是 minimal 变更**——不需要 refactor TUI 的 widget tree 也不需要重写 `_run_agent`。**10 行代码 + 1 个新测试** = 完整功能。**教训**：TUI 的"消息源"是 TUI 与"agent loop" 的接缝，把接缝做得"可注入"（initial_messages 是 input）后，`--resume` 自然 work。
+  - **bash sandbox 的"已知限制"是 honest engineering**——不假装 detector 是 secure，而是 document limitation + 写 test 钉住行为 + 把"真正的边界"放到 container fs 权限。**这是 Claude Code 自己也在用的策略**（sandbox 不是真 sandbox，靠 container）。**教训**：spec 写的"防 XX 攻击"如果不能完全防，**显式记录 limitation 比假装安全更好**。
+  - **Code review 找出的 6 项全是"spec 内部不一致"**——和 E2E 找的 1 项同源：unit + integration 测试覆盖了"每个组件正确"，但"组件间契约"只有 E2E 测一次。**Phase 5 应该把"代码 review + E2E + manual test" 作为标准收尾流程**。
 - **学到的教训**：
   - **spec 写"环境敏感"测试时必须显式 monkeypatch env var**——Task 4 的 handler 从 `os.environ.get("MINI_AGENT_WORKSPACE", ...)` 读 workspace，spec 写测试时漏了 `monkeypatch.setenv`。教训：**所有读 env var 的代码，测试必须显式设 env var**（用 pytest 的 `monkeypatch` fixture，自动 cleanup）。spec 作者容易默认"测试在容器里跑，环境已配好"——但 pytest 用的是 host 进程的环境，不是容器。Task 2/3 的 monkeypatch 教训（"测试资源必须被读取才算测试"）在 Task 4 演化成"**环境依赖必须被注入才算测试**"。
   - **测试文件顶部的 import 失败会让整个 module 收不到任何 item**——本次 RED 输出不是"5 failed"，而是 `Interrupted: 1 error during collection`。这是个**比"5 failed"更强的失败信号**：测试文件根本进不了 runner，因为 import 期就崩了。如果未来看到 collection error，第一反应是看 traceback 顶部的 `in <module>` 那一行——是 import 失败，不是 test 失败。**教训：test module 顶部的 import 越少越好**（"side-effect import"会让 RED 阶段无法精确报告哪个 test 红），但 `read_file` 这种 spec 显式要求的 import 不可避免。

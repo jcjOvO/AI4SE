@@ -75,3 +75,41 @@ async def test_user_input_triggers_agent_run() -> None:
         # Status bar should return to 'ready' after the agent finishes
         status = app.query_one("#status", Static)
         assert str(status.renderable) == "ready"
+
+
+@pytest.mark.asyncio
+async def test_initial_messages_replayed_on_mount() -> None:
+    """When --resume passes initial_messages, they render on mount
+    so the user sees prior context. New user input is then appended."""
+    history = [
+        {"role": "user", "content": "previous question"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "previous answer"},
+                {"type": "tool_use", "id": "t1", "name": "read_file", "input": {"path": "x"}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "ok", "is_error": False},
+            ],
+        },
+    ]
+    app = AgentApp(
+        llm=_LLM(),  # type: ignore[arg-type]
+        tools=_Tools(),  # type: ignore[arg-type]
+        session=None,
+        session_id="s-2",
+        initial_messages=history,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        log = app.query_one("#log", RichLog)
+        text = "\n".join(str(line) for line in log.lines)
+        # History should be replayed
+        assert "previous question" in text
+        assert "previous answer" in text
+        # The new run_agent will produce assistant> with whatever echo
+        # we get, so just verify the initial replay rendered.

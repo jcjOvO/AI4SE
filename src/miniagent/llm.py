@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,7 +31,12 @@ class ToolCall:
 
 _RETRIABLE_STATUS = {408, 409, 429, 500, 502, 503, 504, 529}
 _MAX_RETRIES = 3
-_BACKOFF_BASE = 0.01  # seconds; backoff = base * 2**attempt (test-friendly)
+# Exponential-backoff base, in seconds. Production should use 1.0s so the
+# 429/5xx/529 retries don't hammer the API; tests can set the env var
+# `MINI_AGENT_LLM_BACKOFF_BASE=0.01` (or monkeypatch this constant) to
+# keep test suites fast. Default 1.0 follows Anthropic's published
+# guidance to respect `retry-after` headers.
+_BACKOFF_BASE = float(os.environ.get("MINI_AGENT_LLM_BACKOFF_BASE", "1.0"))
 
 
 class _RetriableError(Exception):

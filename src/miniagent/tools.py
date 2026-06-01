@@ -291,8 +291,13 @@ bash = Tool(
     name="bash",
     description=(
         "Execute a shell command in the workspace. Returns stdout, stderr, and exit code. "
-        "Commands referencing paths outside the workspace are rejected. "
-        "Default timeout 30s (configurable)."
+        "Commands referencing literal paths outside the workspace are rejected. "
+        "Default timeout 30s (configurable). "
+        "Note: the path-escape check inspects shlex-split tokens after stripping "
+        "common shell metachars; it does NOT expand shell variables (e.g. "
+        "`$HOME/secret`, `~/secret`, `$(echo /etc/passwd)`). For those, rely on "
+        "container filesystem permissions — the command runs with `cwd` set to the "
+        "workspace root."
     ),
     input_schema={
         "type": "object",
@@ -340,3 +345,19 @@ async def execute(name: str, args: dict[str, Any]) -> ToolResult:
         return await tool.handler(args)
     except Exception as e:  # programming errors only; tool errors should be returned, not raised
         return ToolResult(error=f"{type(e).__name__}: {e}")
+
+
+class _ToolsNamespace:
+    """Object wrapper exposing all_schemas() / execute() as methods.
+
+    The agent loop's `ToolsProtocol` expects an object (calls
+    `tools.all_schemas()` and `await tools.execute(...)`), not a raw dict
+    or module. This singleton lets callers do
+    `from miniagent.tools import tools` and pass the object directly.
+    """
+
+    all_schemas = staticmethod(all_schemas)
+    execute = staticmethod(execute)
+
+
+tools = _ToolsNamespace()

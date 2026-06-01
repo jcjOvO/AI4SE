@@ -40,19 +40,8 @@ def mock_server() -> str:
 @pytest.mark.e2e
 async def test_agent_against_mock_llm(mock_server: str, tmp_path: Path) -> None:
     llm = LLMClient(api_key="sk-fake", base_url=mock_server, model="claude-mock")
-    from typing import Any
+    from miniagent.tools import tools
 
-    from miniagent.tools import all_schemas
-    from miniagent.tools import execute as tools_execute
-
-    class _ToolsAdapter:
-        def all_schemas(self) -> list[dict[str, Any]]:
-            return all_schemas()
-
-        async def execute(self, name: str, args: dict[str, Any]) -> Any:
-            return await tools_execute(name, args)
-
-    tools = _ToolsAdapter()
     events = []
     msgs = await run(
         messages=[{"role": "user", "content": "hi"}],
