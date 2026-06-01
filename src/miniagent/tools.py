@@ -1,6 +1,7 @@
 """Tool registry and the 4 built-in tools."""
 from __future__ import annotations
 
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,8 +43,68 @@ def resolve_sandbox_path(root: Path, requested: str) -> Path:
     return candidate
 
 
+# ---------------------------------------------------------------------------
+# Task 4: read_file tool
+# ---------------------------------------------------------------------------
+
+
+async def _read_file_handler(args: dict[str, Any]) -> ToolResult:
+    root = Path(os.environ.get("MINI_AGENT_WORKSPACE", Path.cwd()))
+    try:
+        path = resolve_sandbox_path(root, args["path"])
+    except ValueError as e:
+        return ToolResult(error=str(e))
+
+    if not path.exists():
+        return ToolResult(error=f"FileNotFound: {args['path']}")
+    if path.is_dir():
+        return ToolResult(error=f"IsADirectory: {args['path']}")
+
+    offset = int(args.get("offset", 0))
+    limit = int(args.get("limit", 2000))
+
+    try:
+        raw = path.read_bytes()
+    except OSError as e:
+        return ToolResult(error=f"{type(e).__name__}: {e}")
+
+    # Binary detection: if any null byte in first 8KB, hex-preview
+    if b"\x00" in raw[:8192]:
+        preview = raw[:4096]
+        return ToolResult(output=f"<binary file, {len(raw)} bytes>\n{preview.hex()}")
+
+    text = raw.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    chunk = lines[offset : offset + limit]
+    return ToolResult(output="\n".join(chunk))
+
+
+read_file = Tool(
+    name="read_file",
+    description=(
+        "Read a file from the workspace. Returns up to `limit` lines starting at `offset`. "
+        "Binary files are returned as a hex preview."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Path relative to workspace, or absolute within workspace",
+            },
+            "offset": {"type": "integer", "description": "Line offset to start from", "default": 0},
+            "limit": {"type": "integer", "description": "Max lines to return", "default": 2000},
+        },
+        "required": ["path"],
+    },
+    handler=_read_file_handler,
+)
+
+
 # Registry populated by later tasks; declared here so the import works.
-REGISTRY: dict[str, Tool] = {}
+REGISTRY: dict[str, Tool] = {
+    "read_file": read_file,
+}
 
 
 def all_schemas() -> list[dict[str, Any]]:

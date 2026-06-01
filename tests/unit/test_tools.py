@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from miniagent.tools import REGISTRY, ToolResult, resolve_sandbox_path  # noqa: F401
+from miniagent.tools import (  # noqa: F401
+    REGISTRY,
+    ToolResult,
+    read_file,
+    resolve_sandbox_path,
+)
 
 
 def test_resolve_sandbox_path_inside(tmp_workspace: Path) -> None:
@@ -27,3 +32,59 @@ def test_tool_result_is_error() -> None:
     err = ToolResult(output="", error="boom")
     assert not ok.is_error
     assert err.is_error
+
+
+# ---------------------------------------------------------------------------
+# Task 4: read_file tool
+# ---------------------------------------------------------------------------
+# Note: read_file's handler reads the workspace root from the
+# MINI_AGENT_WORKSPACE env var (with a cwd fallback). The spec did not mention
+# setting it, but without it the handler would resolve paths against cwd and
+# miss the tmp_workspace fixture. Each test below sets the env var explicitly
+# (precedent: Task 2/3 monkeypatch fix in AGENT_LOG #4 / #5).
+
+
+async def test_read_file_basic(tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    (tmp_workspace / "hello.txt").write_text("line1\nline2\nline3\n")
+    r = await read_file.handler({"path": "hello.txt"})
+    assert r.error is None
+    assert "line1" in r.output
+    assert "line3" in r.output
+
+
+async def test_read_file_missing(tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    r = await read_file.handler({"path": "nope.txt"})
+    assert r.is_error
+    assert "FileNotFound" in r.error
+
+
+async def test_read_file_offset_and_limit(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    (tmp_workspace / "f.txt").write_text("\n".join(f"line{i}" for i in range(100)))
+    r = await read_file.handler({"path": "f.txt", "offset": 10, "limit": 5})
+    assert r.error is None
+    assert "line10" in r.output
+    assert "line14" in r.output
+    assert "line15" not in r.output
+
+
+async def test_read_file_rejects_traversal(
+    tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    r = await read_file.handler({"path": "../secret.txt"})
+    assert r.is_error
+    assert "escapes sandbox" in r.error
+
+
+async def test_read_file_binary(tmp_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))
+    (tmp_workspace / "bin.dat").write_bytes(b"\x00\x01\x02hello\xff")
+    r = await read_file.handler({"path": "bin.dat"})
+    assert r.error is None
+    # Should be hex-preview, not raw
+    assert "00 01 02" in r.output or "000102" in r.output
