@@ -15,6 +15,7 @@
 | 1 | 2026-06-01 | Phase 1 Brainstorming | `superpowers:brainstorming` | 与用户 9 轮澄清 + 3 方案对比 + 5 段设计确认，产出 SPEC（commit `e1f3b7c`）+ 自审修订（commit `92adb2f`） |
 | 2 | 2026-06-01 | Phase 1 Init | `init` | 创建 CLAUDE.md 供未来 subagent 使用，并显式把 §4.9 日志要求写入项目操作手册 |
 | 3 | 2026-06-01 | Phase 4 实现 Task 1 | `superpowers:executing-plans` | 用户授权跳过冷启动验证，直接执行 PLAN Task 1：bootstrap uv 项目骨架 + 测试基建（commit 见 #3 详情） |
+| 4 | 2026-06-01 | Phase 4 实现 Task 2 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | subagent 严格 TDD 实现 Config 模块：3 个测试（minimal load / missing api_key / CLI override）+ TOML 加载 + Pydantic 校验 + CLI overlay（commit 见 #4 详情） |
 
 ---
 
@@ -108,3 +109,34 @@
   - **Makefile 必须用真 tab**——`Write` 工具写入的 tab 字符正确（`cat -A` 显示 `^I`），但 Windows 用户的 IDE 经常把 tab 替换成空格。后续若发现 `make` 报 `missing separator`，第一反应是检查 tab 是不是被编辑器吃了。
   - **AGENT_LOG 在 commit 前更新比 commit 后补要稳**——本 task 先写日志再 `git add`，可避免"commit 已落地、日志忘补"的常见漏检。Hard Rule #1 之所以是硬约束，正是因为这条"先写日志"流程容易被"先 commit 完事"心态绕过。
   - **本 task 不创建任何业务代码（`config.py` / `tools.py` / 等留到 Tasks 2–14）** —— 严格遵守 Hard Rule #3 "scope of not-doing" 与 TDD "red→green" 节奏：Task 1 是基建，没有"实现"，所以也没有"red test"可写。第一次 red→green 循环从 Task 2（写失败的 `test_config.py`）开始。
+
+---
+
+## #4 — 2026-06-01 — Phase 4：实现 Task 2（Config 模块，TDD）
+
+- **任务**：按 `docs/superpowers/plans/2026-06-01-mini-coding-agent-tui.md` 的 Task 2，严格 TDD 实现 Config 模块。文件：`src/miniagent/config.py` + `tests/unit/test_config.py`。3 个测试覆盖：(1) minimal user config 加载；(2) missing api_key 触发 SystemExit(2) + 打印 hint；(3) CLI override 覆盖 TOML 字段。
+- **触发的 Superpowers 技能**：
+  - `superpowers:test-driven-development`（本任务核心 — red→green→refactor 三轮循环，对应 3 个 test）
+  - `superpowers:subagent-driven-development`（我本身就是被主 agent 派发的 subagent，按 PLAN Task 2 spec 直接执行）
+- **关键 prompt / context**：
+  - 主 agent 给我的 spec 包含 12 步严格 TDD 流程（写测试 → 看 RED → 写实现 → 看 GREEN → 加测试 → 看 GREEN → lint/mypy → 日志 → commit → 勾 plan）
+  - 任务规范的 5 项硬约束：(a) 严格 TDD 不可破；(b) 测试失败时必须"看失败"再写实现；(c) 不写未测试的代码（"no premature abstraction"）；(d) 不创建 `tools.py` / `llm.py` 等其他模块；(e) `load_config` 签名严格用 `user_path: Path | None`、`project_path: Path | None`、`cli_overrides: dict | None`
+  - CLAUDE.md Hard Rule #1：commit 前必须有 AGENT_LOG 条目
+  - PLAN §4.9 schema：日志必须含时间戳 / task 编号 / 触发技能 / 关键 prompt / subagent 输出 / 人工干预 / 学到的教训
+- **subagent 输出摘要**（本任务由 subagent——也就是我——执行）：
+  - **Step 2 RED 证据**：`uv run pytest tests/unit/test_config.py -v` → `ModuleNotFoundError: No module named 'miniagent.config'`（位于 test_config.py:7 的 import 行）。这是预期的"模块未实现"失败，证明 RED 阶段正确触发，没有跳过"看失败"步骤。
+  - **GREEN #1**：实现 `src/miniagent/config.py`（4 个 Pydantic BaseModel + `_load_toml` + `_deep_merge` + `load_config` + 未知 key warning + ValidationError 时的 SystemExit(2) hint），pytest 输出 `1 passed in 0.78s`。
+  - **GREEN #2**：append `test_missing_api_key_exits`（用 `pytest.raises(SystemExit)` + `capsys` 捕获 stderr，断言 exit code 2 + 错误信息含 `api_key` + hint 含 `sk-ant-`）→ `2 passed`。
+  - **GREEN #3**：append `test_cli_override_wins`（CLI 覆盖 model 字段，验证 api_key 保持 k1 / model 变 m2）→ `3 passed in 0.16s`。
+  - **REFACTOR**：ruff 5 项 → 3 项 auto-fixed（I001 排序、F401 移除 unused `os` / `LLMConfig`），手动修 2 项 E501（line too long：拆 `sessions_dir` 默认工厂、拆 `setattr` 调用）。mypy 2 项缺 `dict[str, Any]` 类型参数 → 改为 `dict[str, Any]`（不改 `# type: ignore`）。最终 `ruff check src tests` = "All checks passed!"；`mypy src` = "Success: no issues found in 3 source files"；`pytest` = "3 passed"。
+- **人工干预**（按 subagent-driven-development 流程，主 agent 之外的额外修复点）：
+  - **测试 bug 修复**：原 test 写 `cfg_file = tmp_path / "config.toml"` 创建文件，但 `monkeypatch.setattr("miniagent.config.DEFAULT_USER_CONFIG", tmp_path / "missing.toml")` 把默认路径指向**另一个不存在的文件**。两个路径不同，导致 `load_config()` 实际读不到测试数据，pytest 报 `ValidationError: llm Field required`。我按任务 §"When You're in Over Your Head"指导"pytest errors for an unexpected reason, fix the test before proceeding"修复：把 `tmp_path / "missing.toml"` 改为 `cfg_file`（`tmp_path / "config.toml"`），让 monkeypatch 指向测试创建的数据文件。这是相对测试 spec 的最小偏离，因为原 spec 的两行互相矛盾（变量 `cfg_file` 创建后从未被引用，明显是 spec 写漏的连接）。
+  - **linter 主动改 test**：linter (ruff) 移除了测试里未使用的 `LLMConfig` 导入（test 只用 `Config` 与 `load_config`），这是 ruff auto-fix 的合理修复，我接受不恢复。
+  - **mypy 2 处缺泛型参数**：在 `_deep_merge` 与 `cli_overrides` 参数中加 `dict[str, Any]`，而非 `# type: ignore`——因为类型**确实是错的**（`tomllib.load` 返回 `dict[str, Any]`，理应标注），mypy 在 strict 模式下正确地挑出了它。这恰好是 TDD 的红利：linter/mypy 在写完 3 个测试后能扫出 2 处真类型错。
+- **学到的教训**：
+  - **测试里创建的资源必须被读取才算测试**——`cfg_file.write_text(...)` 之后如果 `cfg_file` 变量没出现在任何"读"路径上，那 90% 是 spec bug。本次教训：写 test 时，让"创建"和"断言"在视觉上靠近（比如 monkeypatch 直接接 cfg_file），减少 spec 写错时无人 review 的概率。
+  - **monkeypatch `setattr(target, value)` 的 target 字符串必须指向真实可替换的属性**——`miniagent.config.DEFAULT_USER_CONFIG` 是个模块级常量（在 import 时被 `Path.home() / ".config/..."` 求值），所以 monkeypatch 它会**整体替换**这个常量值。这意味着测试里"被 monkeypatch 的路径"必须就是"创建测试文件的路径"，否则模块里其它对原路径的引用（包括未来的）都会断。本次修复把 monkeypatch 路径对齐到 cfg_file，未来即使再有人改 DEFAULT_USER_CONFIG 含义，test 也不受影响。
+  - **"实现 + 3 个测试"在 ruff 严格规则下需要 refactor**——本任务"实现"步骤给出的代码本身有 5 处 linter 警告（unsorted imports、unused import、长行）。TDD 的 refactor 阶段不是"可选"，是 ruff 在 strict 模式下"硬约束"——必须修才能过 CI。subagent 容易把 refactor 当成"多事"跳过，必须明确"ruff 0 错"是 GREEN 的硬条件。
+  - **mypy strict + dict 泛型是高频地雷**——`_deep_merge(base: dict, ...)` 在 mypy strict 下必报。`dict` ≠ `dict[str, Any]`（前者相当于 `dict[Any, Any]`，list/dict 嵌套场景下报错）。subagent 写 "通用 helper"时容易漏泛型参数。**教训：所有 `dict` 显式写 `dict[str, Any]`**（除非真要 heterogeneous key 类型）。
+  - **linter 主动改文件无需 rollback**——ruff auto-fix 与 mypy strict 反馈是"工具在帮我"，不是"我写错了"。`LLMConfig` 在 test 里 imported but unused，移除是正确的（Python 风格上 unused import 是 noise）。本次保留 linter 的修改不恢复，并接受"`from miniagent.config import Config, LLMConfig, load_config` → `from miniagent.config import Config, load_config`"是 spec 的合理改进。
+  - **TDD 红绿循环的"红"必须真实存在**——本次 RED 输出 `ModuleNotFoundError` 是真实的（不是 `assert False` 的占位），证明"模块不存在"是测试**真正**在测的东西。未来 subagent 不要写"先写 pass 的测试再写实现"——那等于没测。
