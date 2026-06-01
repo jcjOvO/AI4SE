@@ -144,10 +144,72 @@ write_file = Tool(
 )
 
 
+# ---------------------------------------------------------------------------
+# Task 6: edit_file tool
+# ---------------------------------------------------------------------------
+
+
+async def _edit_file_handler(args: dict[str, Any]) -> ToolResult:
+    root = Path(os.environ.get("MINI_AGENT_WORKSPACE", Path.cwd()))
+    try:
+        path = resolve_sandbox_path(root, args["path"])
+    except ValueError as e:
+        return ToolResult(error=str(e))
+
+    old = args["old_string"]
+    new = args["new_string"]
+    replace_all = bool(args.get("replace_all", False))
+
+    if not path.exists():
+        return ToolResult(error=f"FileNotFound: {args['path']}")
+
+    text = path.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count == 0:
+        return ToolResult(error=f"old_string not found in {args['path']}")
+    if count > 1 and not replace_all:
+        return ToolResult(
+            error=f"old_string not unique ({count} matches); pass replace_all=true to allow"
+        )
+
+    if replace_all:
+        new_text = text.replace(old, new)
+        n = count
+    else:
+        new_text = text.replace(old, new, 1)
+        n = 1
+
+    path.write_text(new_text, encoding="utf-8")
+    return ToolResult(
+        output=f"Edited {args['path']} ({n} replacement{'s' if n != 1 else ''})"
+    )
+
+
+edit_file = Tool(
+    name="edit_file",
+    description=(
+        "Replace a specific string in a file. By default old_string must occur exactly once. "
+        "Pass replace_all=true to replace every occurrence."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "old_string": {"type": "string"},
+            "new_string": {"type": "string"},
+            "replace_all": {"type": "boolean", "default": False},
+        },
+        "required": ["path", "old_string", "new_string"],
+    },
+    handler=_edit_file_handler,
+)
+
+
 # Registry populated by later tasks; declared here so the import works.
 REGISTRY: dict[str, Tool] = {
     "read_file": read_file,
     "write_file": write_file,
+    "edit_file": edit_file,
 }
 
 

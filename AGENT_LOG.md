@@ -19,6 +19,7 @@
 | 5 | 2026-06-01 | Phase 4 实现 Task 3 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | subagent 严格 TDD 实现 Tools 模块骨架：4 个测试（sandbox 路径 inside/traversal/absolute-outside + `ToolResult.is_error`）+ `ToolResult`/`Tool`/`REGISTRY`/`resolve_sandbox_path`/`all_schemas`/`execute`（commit 见 #5 详情） |
 | 6 | 2026-06-01 | Phase 4 实现 Task 4 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | subagent 严格 TDD 实现 `read_file` tool：5 个测试（basic/missing/offset+limit/traversal/binary）+ `_read_file_handler` + `read_file` Tool + `REGISTRY` 填充（commit 见 #6 详情） |
 | 7 | 2026-06-01 | Phase 4 实现 Task 5 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 5：write_file tool 5 个测试（creates/overwrites/parent_dirs/traversal/returns_size）+ `_write_file_handler` + `write_file` Tool + `REGISTRY` 扩展（commit 见 #7 详情） |
+| 8 | 2026-06-01 | Phase 4 实现 Task 6 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 6：edit_file tool 5 个测试（single_replacement/not_unique/not_found/replace_all/traversal）+ `_edit_file_handler` + `edit_file` Tool + `REGISTRY` 扩展（commit 见 #8 详情） |
 
 ---
 
@@ -231,6 +232,29 @@
   - **handler 主体比测试矩阵更"防御性"**——handler 加了 `isinstance(content, str)` 类型检查（spec 没明说，但 spec 模板的 `if not isinstance(content, str): return ToolResult(error=...)` 是字面照搬）。这个检查对应的测试矩阵里没有（spec 测试都传 `str` content），属于"未测试的防御代码"。**教训：spec 给的 handler 模板是"字面照搬 vs 自由发挥"的边界——按 Plan 硬规则"no premature abstraction"，handler 模板的每行（包括 spec 没明示的 isinstance 守卫）都应照搬，不应 subagent 自由删减**。
   - **Task 4/5 共享 `tools.py`，单线程编辑是正确选择**——Task 4 commit `10e2d94` 已 merge 到 `feature/phase-4-impl-tasks-1-3`，Task 5 在同一文件追加。如果并发派发 Task 4 与 Task 5 的 subagent，会 100% 撞 `REGISTRY` 字典的合并 conflict。**教训：共享单文件的任务必须串行**（Plan 文档的 Parallelization Map 已显式说 "Tasks 4–7 all touch `src/miniagent/tools.py`; serialize them in one worktree"）。
   - **"主 agent 直接执行"是 Task 5 的合理选择**——Task 2/3/4 派发 subagent 是为了"context 隔离 + 严格 TDD 自审"。Task 5 同一文件追加，规模小（1 个新 Tool + 1 个新 handler + 1 个新 entry），主 agent 直接执行比"派发 subagent 等结果"更高效，且 Task 4/5/6/7 串行可保持代码编辑连贯性。**教训：subagent 派发的判断标准是"任务规模 + 文件独立性"——单文件追加 < 50 行的任务，主 agent 直接执行更优**。
+
+---
+
+## #8 — 2026-06-01 — Phase 4：实现 Task 6（`edit_file` tool，TDD）
+
+- **任务**：按 PLAN Task 6 严格 TDD 实现 `edit_file` tool。文件：`src/miniagent/tools.py`（追加 `_edit_file_handler` + `edit_file` Tool + 扩展 `REGISTRY`）+ `tests/unit/test_tools.py`（追加 5 个测试）。5 个测试覆盖：(1) 单次替换；(2) 多次出现未传 `replace_all` → 报错且文件不变；(3) 找不到 `old_string` → 报错；(4) `replace_all=True` 替换所有出现；(5) sandbox 外路径拒绝。
+- **触发的 Superpowers 技能**：
+  - `superpowers:test-driven-development`（red→green→refactor）
+  - `superpowers:subagent-driven-development`（与 Task 5 同款判断：单文件追加 + 小规模，主 agent 直接执行）
+- **subagent 输出摘要**（主 agent 直接执行）：
+  - **Step 1 RED 证据**：`uv run pytest tests/unit/test_tools.py -v -k edit_file` → `ImportError: cannot import name 'edit_file'`，pytest collection error。证明 RED 触发。
+  - **Step 2 GREEN**：在 `tools.py` 中追加 `_edit_file_handler`（root from env → `resolve_sandbox_path` → `if not path.exists` → `text.count(old)` → `count == 0` / `count > 1 and not replace_all` 双错误分支 → `replace_all` 决定用 `replace(old, new)` 还是 `replace(old, new, 1)` → 返回 "Edited <path> (N replacement[s)"）+ 定义 `edit_file = Tool(...)` + `REGISTRY` 加 `edit_file`。pytest → `5 passed in 0.10s`。
+  - **Step 3 全量回归**：`uv run pytest` → `22 passed in 0.33s`（17 prior + 5 new），无 Task 2/3/4/5 回归。
+  - **Step 4 lint 零偏离**：`ruff check src tests` → `All checks passed!`；`mypy src` → `Success: no issues found in 4 source files`。
+- **人工干预**：
+  - **沿用 Task 4/5 教训**：5 个新测试全加 `monkeypatch.setenv("MINI_AGENT_WORKSPACE", str(tmp_workspace))`。**"读 env var 的代码 → 测试必 monkeypatch"** 已沉淀为项目级硬规则。
+  - **import 合并 + 公共 API 表面表达**：把 `edit_file` 加进 `from miniagent.tools import (...)` 多行 import，与既有符号共享 `# noqa: F401`。`REGISTRY, ToolResult, edit_file, read_file, resolve_sandbox_path, write_file` 共用同一 noqa。
+  - **handler "f-string 内嵌三元" 处理**：`f"Edited {args['path']} ({n} replacement{'s' if n != 1 else ''})"` 把单复数逻辑直接内联到 f-string 内，比拉出辅助函数更紧凑。lint 与 mypy 均无意见（单行、类型明确）。**教训：handler 模板的"f-string 化"是 ruff 鼓励的风格（项目 `[tool.ruff.lint] select = [..., "SIM"]`），不要拆辅助函数。**
+- **学到的教训**：
+  - **"不写未测试的代码"边界**——handler 模板的 `isinstance(content, str)` 与 `count == 0` / `count > 1` 双错误分支都是 spec 字面照搬（spec 明示），不属于"防御性自由发挥"。**教训：spec 显式写的每个错误分支都必须有对应测试**——本次 5 个测试覆盖了 single_replacement / not_unique / not_found / replace_all / traversal 五个 spec 明示分支，无遗漏。
+  - **`f"…{expr if cond else ''}"` 内联三元是 ruff SIM 鼓励写法**——Task 5 的 "X bytes" 是单值，Task 6 的 "N replacement" 需要单复数判断。把判断内联到 f-string 比 `suffix = "s" if n != 1 else ""` 抽变量更紧凑，且 ruff 不报 SIM rule（rule SIM510 要求的是 `if a: x = 1 else: x = 2` 转三元，不是反过来）。**教训：f-string 内嵌三元是 ruff 友好写法，subagent 不要"反向重构"。**
+  - **Task 5/6 串行无 merge conflict**——两个 Task 都向 `tools.py` 末尾追加 + 改 `REGISTRY` 字典最后一行，串行执行天然无冲突（不需要 git rebase）。**教训：单文件"append-only"变更串行即可，parallel worktree 适合"修改不同文件"的任务。**
+  - **`edit_file` 的"不唯一"语义是"安全默认值"**——spec 的 default `replace_all=False` + 多次出现时拒绝 + 强制要求 LLM 提供更多上下文才能重试，这是 Claude Code 的设计选择（vs. 默默替换第一个）。**教训：tool 的"安全默认"应在 spec 阶段就明确，subagent 不要在实现时改默认（"replace_all 默认 True 也能跑通测试"——但会破坏 LLM 协作语义）。**
 - **学到的教训**：
   - **spec 写"环境敏感"测试时必须显式 monkeypatch env var**——Task 4 的 handler 从 `os.environ.get("MINI_AGENT_WORKSPACE", ...)` 读 workspace，spec 写测试时漏了 `monkeypatch.setenv`。教训：**所有读 env var 的代码，测试必须显式设 env var**（用 pytest 的 `monkeypatch` fixture，自动 cleanup）。spec 作者容易默认"测试在容器里跑，环境已配好"——但 pytest 用的是 host 进程的环境，不是容器。Task 2/3 的 monkeypatch 教训（"测试资源必须被读取才算测试"）在 Task 4 演化成"**环境依赖必须被注入才算测试**"。
   - **测试文件顶部的 import 失败会让整个 module 收不到任何 item**——本次 RED 输出不是"5 failed"，而是 `Interrupted: 1 error during collection`。这是个**比"5 failed"更强的失败信号**：测试文件根本进不了 runner，因为 import 期就崩了。如果未来看到 collection error，第一反应是看 traceback 顶部的 `in <module>` 那一行——是 import 失败，不是 test 失败。**教训：test module 顶部的 import 越少越好**（"side-effect import"会让 RED 阶段无法精确报告哪个 test 红），但 `read_file` 这种 spec 显式要求的 import 不可避免。
