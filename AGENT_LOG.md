@@ -23,6 +23,7 @@
 | 9 | 2026-06-01 | Phase 4 实现 Task 7 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 7：bash tool 6 个测试（runs_command/captures_nonzero_exit/captures_stderr/rejects_path_escape/rejects_traversal_token/respects_workspace_root）+ `_command_escapes_sandbox` + `_bash_handler` + `bash` Tool + `REGISTRY` 完整（commit 见 #9 详情） |
 | 10 | 2026-06-01 | Phase 4 实现 Task 8 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 8：SessionStore 8 个测试（init_creates_schema/create_returns_uuid/get_returns_metadata/get_missing_raises/list_recent_orders_by_updated/append_and_load_roundtrip/append_message_sync_writes_immediately/corrupt_db_raises）+ `CorruptSessionError` + `SessionMeta` + `SessionStore` CRUD（commit 见 #10 详情） |
 | 11 | 2026-06-01 | Phase 4 实现 Task 8b | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 8b：AsyncSessionStore 2 个测试（does_not_block/close_drains_queue）+ 队列 + 后台 flusher 任务 + `close()` 阻塞 drain（commit 见 #11 详情） |
+| 12 | 2026-06-01 | Phase 4 实现 Task 9 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 9：LLMClient skeleton 2 个测试（text_and_tool_calls/passes_messages_and_model）+ `AuthError` / `ContextOverflowError` / `RetryExhaustedError` / `ToolCall` + `LLMClient` SSE 流式累积（commit 见 #12 详情） |
 
 ---
 
@@ -341,6 +342,35 @@
   - **`close()` 设计是"drain + stop"——必阻塞**——spec 设计是 `await close()` 等到 queue 排空。这与 `append_message` 的"不阻塞"形成对照：一个 producer-friendly（append 立即返回），一个 shutdown-friendly（close 必等完成）。**教训：async wrapper 的 "fire-and-forget" 与 "graceful shutdown" 是两个独立维度，不要混在一个方法里**。
   - **TUI 集成留到 Task 13**——spec 8b Step 5/6/7 显式写"`on_mount` 包装 AsyncSessionStore + `__main__.py` 传 sync store"。本次跳过这两个修改，理由：(1) `tui.py` 当时不存在（Task 12 才创建）；(2) `__main__.py` 的改造是 Task 14。本次 commit 只含 session 模块。**未来 reviewer 看到 Task 8b commit 不含 tui.py 改动，应该理解这是 spec 写错"超前"，不是 subagent 漏做**。
   - **Flusher 错误处理"log + drop"是 spec 模板字面照搬**——handler 捕到 `Exception` 后只 `print` 到 stderr 然后 drop 消息，不重试。spec 注释说"A future task will add a retry-with-backoff loop"，本次严格按 spec 不加重试。**教训：spec 显式标 "future work" 的地方，subagent 不要"顺手补全"——保持 commit 与 spec 严格对齐**。
+
+---
+
+## #12 — 2026-06-01 — Phase 4：实现 Task 9（`LLMClient` skeleton，SSE streaming，TDD）
+
+- **任务**：按 PLAN Task 9 严格 TDD 实现 `LLMClient` skeleton。文件：`src/miniagent/llm.py`（新文件，含 `AuthError` / `ContextOverflowError` / `RetryExhaustedError` 异常 + `ToolCall` dataclass + `LLMClient` 类的 `__init__` / `close` / `stream_step`）+ `tests/unit/test_llm.py`（新文件，2 个测试）。2 个测试覆盖：(1) SSE 流式响应正确累积 `text` + `tool_calls`；(2) request body 含 `model` / `messages` / `stream=True`。
+- **触发的 Superpowers 技能**：
+  - `superpowers:test-driven-development`（red→green→refactor，2 轮修复）
+  - `superpowers:subagent-driven-development`（主 agent 直接执行）
+  - `superpowers:systematic-debugging`（诊断 respx 0.23 API 变化 + mypy strict 错）
+- **subagent 输出摘要**（主 agent 直接执行）：
+  - **Step 1 RED 证据**：`uv run pytest tests/unit/test_llm.py -v` → `ModuleNotFoundError: No module named 'miniagent.llm'`，pytest collection error。RED 触发。
+  - **Step 2 GREEN #1**：写 `src/miniagent/llm.py`（httpx.AsyncClient + 3 个异常类 + ToolCall + LLMClient.__init__/close/stream_step）。pytest → `1 passed, 1 failed`: `test_stream_step_returns_text_and_tool_calls` 报 `TypeError: sse_response() takes 0 positional arguments but 1 was given`。
+  - **Step 3 GREEN #2（respx API 修复）**：`def sse_response()` 是 respx 0.20- 的旧签名，respx 0.23+ 把 `Request` 对象传给 `side_effect` callable。修复：把签名改为 `def sse_response(request: httpx.Request)` + `del request`（不用参数）。pytest → `2 passed`。
+  - **Step 4 全量回归**：`uv run pytest` → `40 passed in 0.94s`（38 prior + 2 new），无回归。
+  - **Step 5 lint 偏离**（2 项 mypy 修复）：
+    1. `llm.py:50` `messages: list[dict]` → `list[dict[str, Any]]`
+    2. `llm.py:74` `current_block: dict | None` → `dict[str, Any] | None`
+    理由：mypy strict 模式下 `dict` 与 `dict[str, Any]` 是不同类型（前者 = `dict[Any, Any]`，后者显式泛型）。Task 2 教训"`dict` 显式写 `[str, Any]`"再次验证。
+  - **Step 6 lint 验证**：`ruff check src tests` → `All checks passed!`；`mypy src` → `Success: no issues found in 6 source files`。
+- **人工干预**（2 项 plan 之外的修复）：
+  - **respx 0.20 → 0.23 API 不兼容**——spec 写的 `def sse_response()` 在 respx 0.20 时代是正确的（callable 接受 0 参数，返回 Response）；respx 0.23+ 改成"传 Request 给 callable"以支持动态 mock。**修复**：函数签名加 `request: httpx.Request` 参数 + `del request`（用不到）。**教训：spec 写于 2026-06-01 之前，假设 respx 0.20。实际项目 `pyproject.toml` 锁了 respx 0.23。subagent 必须按真实环境调测试代码，不能盲信 spec**。
+  - **mypy strict `dict` vs `dict[str, Any]`**——见 Task 2 教训。本次 2 处 mypy 报错与 Task 3 `input_schema: dict` 同构。直接照搬 fix 模式，不留 `# type: ignore`。
+- **学到的教训**：
+  - **"respx side_effect callable" 的 API 变化是 spec 滞后**——spec 写于 spec 阶段（早于环境锁定），subagent 在执行时必须验证 spec 的测试代码能否在当前环境跑通。**教训：测试代码要"先在真实环境跑一遍"再 commit——本次 RED 阶段就触发了 respx API 错（不是 assert 错），证明 RED 比"先写测试再实现"更彻底**。
+  - **"httpx.AsyncClient.stream()" 的 use as async context manager**——spec 写 `async with self._client.stream("POST", url, json=body) as resp:`，httpx 0.27+ 这个 pattern 是 stable 的（旧版是 `await resp.__aenter__()`）。本次能直接用是 httpx 0.27+ 的功劳。**教训：httpx 0.27+ 的 `async with client.stream()` 写法是 "response 自动 close" 的标准用法，未来写新 async HTTP 客户端用同一模式**。
+  - **"未测试的代码"边界**——handler 写了 `current_block.setdefault("text", "")` 与 `current_block["input_str"] = ""`，spec 没明示（spec 只说"if content_block.type == 'text'，累加 delta.text"）。**这是 spec 模板的"filler" 步骤——subagent 照搬即可，不需要在测试里加"if text block 初始化"分支**。测试覆盖的是 happy path（一个 text + 一个 tool_use 顺序），没有覆盖"两个 text blocks 并行" 或"空 text block" 的边界。**教训：spec 模板的"setdefault/初始化"是"实现细节"，测试覆盖 happy path 即可，不要为它单开测试**。
+  - **"missing type arguments" 项目级硬规则"在 Task 9 再次生效**——`dict` 在 mypy strict 必报 `[str, Any]`。`list[dict]` / `dict | None` 都要 typed。**这是 Task 2 之后第 4 次同款修复（Tasks 3、4、9）——确认是项目级 rule，不是偶发**。
+  - **retry 逻辑留到 Task 10**——本次 `stream_step` 是"无重试"版本。Task 10 才加 `429/5xx/529` 重试 + `AuthError` 透传。**任务边界**：本次 commit 只含 skeleton，不含 retry 包装。**未来 reviewer 看到 Task 9 commit 不含重试属正常**。
 - **学到的教训**：
   - **spec 写"环境敏感"测试时必须显式 monkeypatch env var**——Task 4 的 handler 从 `os.environ.get("MINI_AGENT_WORKSPACE", ...)` 读 workspace，spec 写测试时漏了 `monkeypatch.setenv`。教训：**所有读 env var 的代码，测试必须显式设 env var**（用 pytest 的 `monkeypatch` fixture，自动 cleanup）。spec 作者容易默认"测试在容器里跑，环境已配好"——但 pytest 用的是 host 进程的环境，不是容器。Task 2/3 的 monkeypatch 教训（"测试资源必须被读取才算测试"）在 Task 4 演化成"**环境依赖必须被注入才算测试**"。
   - **测试文件顶部的 import 失败会让整个 module 收不到任何 item**——本次 RED 输出不是"5 failed"，而是 `Interrupted: 1 error during collection`。这是个**比"5 failed"更强的失败信号**：测试文件根本进不了 runner，因为 import 期就崩了。如果未来看到 collection error，第一反应是看 traceback 顶部的 `in <module>` 那一行——是 import 失败，不是 test 失败。**教训：test module 顶部的 import 越少越好**（"side-effect import"会让 RED 阶段无法精确报告哪个 test 红），但 `read_file` 这种 spec 显式要求的 import 不可避免。
