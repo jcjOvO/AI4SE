@@ -3194,7 +3194,7 @@ git commit -m "docs: log Phase 4 implementation + tick plan checkboxes"
 - [x] Task 6: edit_file
 - [x] Task 7: bash + path-escape detection
 - [x] Task 8: Session — schema + CRUD
-- [ ] Task 9: LLM client — stream_step
+- [x] Task 9: LLM client — stream_step
 - [ ] Task 10: LLM client — retry
 - [ ] Task 11: Agent — run() loop
 - [ ] Task 12: TUI — App skeleton
