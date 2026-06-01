@@ -26,6 +26,7 @@
 | 12 | 2026-06-01 | Phase 4 实现 Task 9 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 9：LLMClient skeleton 2 个测试（text_and_tool_calls/passes_messages_and_model）+ `AuthError` / `ContextOverflowError` / `RetryExhaustedError` / `ToolCall` + `LLMClient` SSE 流式累积（commit 见 #12 详情） |
 | 13 | 2026-06-01 | Phase 4 实现 Task 10 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 10：LLMClient retry 3 个测试（retries_on_429/no_retry_on_401/retry_exhausted_after_4_attempts）+ `_RetriableError` 内部异常 + `_RETRIABLE_STATUS` 集合 + `_MAX_RETRIES=3` + 指数退避 + `RetryExhaustedError` 包装（commit 见 #13 详情） |
 | 14 | 2026-06-01 | Phase 4 实现 Task 11 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 11：Agent 4 个测试（emits_assistant_delta_and_end_turn/executes_tool_and_reflows_result/reflows_tool_error_back_to_llm/propagates_cancellation）+ 5 个 Event dataclass + 3 个 Protocol + `_to_assistant_message` / `_to_tool_result_message` + `run()` 循环 + session hook + AgentError + CancelledError 透传（commit 见 #14 详情） |
+| 15 | 2026-06-01 | Phase 4 实现 Task 12 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 12：TUI skeleton 1 个测试（starts_and_shows_header_and_input）+ AgentApp 骨架 + Header/Log/Input/Status 4 个 widget + focus Input + 显示 session_id[:8]（commit 见 #15 详情） |
 
 ---
 
@@ -432,6 +433,35 @@
   - **`CancelledError` 必须透传"是项目级硬约束"**——`except CancelledError: raise` 而不是 `except CancelledError: pass`。**理由**：TUI 在 `on_input_submitted` 里 `task.cancel()`，期望 `task` 在 cancel 后正常结束（await task 不抛 `CancelledError` 给用户看，但 task 内部可以 re-raise 让 caller's `await task` 感知）。**subagent 写 async loop 时一定不要"吞" CancelledError——它是控制流，不是错误**。
   - **FakeLLM/FakeTools 的 `dataclass` 简化是测试可读性关键**——`@dataclass class FakeLLM: responses: list; async def stream_step(self, ...): return self.responses.pop(0)`，比写 `class FakeLLM(LLMProtocol): ...` 简洁。**教训**：mock 类不一定需要"实现 protocol"——鸭子类型 + mypy `# type: ignore[arg-type]` 就够，spec 这么写是有意的"可读性 > 严格性" trade-off。
   - **Test #4 的"hanging LLM"模式**——`async def stream_step(self, ...): await asyncio.sleep(10); return "", []`，通过 `task.cancel()` 触发 CancelledError。这是"测 cancellation"的经典 pattern。**教训**：测 cancellation 必须有"会阻塞的 fake"——否则 `task.cancel()` 不会触发 `CancelledError`（因为 fake 立即 return）。本次 fake 用 `asyncio.sleep(10)` 是"永不返回"的最小实现。
+
+---
+
+## #15 — 2026-06-01 — Phase 4：实现 Task 12（TUI App skeleton，Textual 4 widget，TDD）
+
+- **任务**：按 PLAN Task 12 严格 TDD 实现 TUI App skeleton。文件：`src/miniagent/tui.py`（新文件，含 `AgentApp(App)` + CSS 4 块 + `__init__` / `compose` / `on_mount` 3 个方法）+ `tests/integration/test_tui.py`（新文件，1 个测试）。1 个测试覆盖：app 启动后渲染 Header（包含 session_id 前 8 字符）+ Input 可 query。
+- **触发的 Superpowers 技能**：
+  - `superpowers:test-driven-development`（red→green→refactor，1 轮修复）
+  - `superpowers:subagent-driven-development`（主 agent 直接执行）
+  - `superpowers:systematic-debugging`（诊断 mypy + ruff 未用 import）
+- **subagent 输出摘要**（主 agent 直接执行）：
+  - **Step 1 RED 证据**：`uv run pytest tests/integration/test_tui.py -v` → `ModuleNotFoundError: No module named 'miniagent.tui'`，pytest collection error。RED 触发。
+  - **Step 2 GREEN #1**：写 `src/miniagent/tui.py`（spec 给的 4 widget 骨架 + CSS）。pytest → `1 passed, 1 mypy 1 error, 1 ruff 2 errors`。
+  - **Step 3 GREEN #2（3 项 lint 修复）**：
+    1. mypy `App` 缺泛型参数 → `class AgentApp(App[None])`（textual 0.80+ 要求 App 子类必须参数化 return type）
+    2. ruff F401 `Callable` imported but unused → 删除（spec 模板"forward-looking" import，Task 13 才用）
+    3. ruff F401 `textual.app.App` imported but unused in test → 删除（test 只 query_one widget，不直接用 App 类型）
+  - **Step 4 全量回归**：`uv run pytest` → `48 passed in 1.72s`（47 prior + 1 new），无回归。
+  - **Step 5 lint 零偏离**：`ruff check src tests` → `All checks passed!`；`mypy src` → `Success: no issues found in 8 source files`。
+- **人工干预**（2 项 plan 之外的修复）：
+  - **`App[None]` 泛型**——textual 0.80+ 把 `App` 改成 `App[ReturnType]`，必须参数化。spec 写的 `class AgentApp(App)` 在 textual 0.80+ 必报 mypy `Missing type arguments for generic type "App"`。**修复**：`App[None]`（TUI app 不返回特定类型）。**教训**：textual 0.80+ 是 breaking change，spec 写于较早版本需要适配。
+  - **删除 2 个未用 import**——spec 模板"forward-looking"地 import 了 `Callable`（Task 13 用）与 `App`（test 实际用 `query_one` 不需要 import 类型）。**修复**：`Callable` 删（Task 13 commit 再加），`App` 删（test 永远不需要 import App）。**教训**：spec 模板的 "demonstrates all public imports" 在 ruff 严格模式下必报 F401，subagent 必须按"实际用到的"删减。
+- **学到的教训**：
+  - **Textual 0.80+ 是 breaking change**——`App[...]` 必须参数化，spec 写于 0.80 之前。subagent 接到 Textual task 第一反应是"看 pyproject.toml 锁的版本" + "对照 spec 模板是否兼容"。**教训**：第三方库 major version 升级必然带 API 变化，spec 与环境要双向校验。
+  - **"TUI 集成测试"是 integration 而非 unit**——本 test 用 `pilot.run_test()`（Textual 测试 driver），需要真实的事件循环 + 完整 App 生命周期。**教训**：Textual test 必须放 `tests/integration/`（vs `tests/unit/`），因为它要拉起 App.run_test 上下文管理器，不是单纯调函数。这是 Plan 的 `pytest.ini` markers 设计——`unit` vs `integration`。
+  - **TUI 测试的"pilot.pause()" 是关键**——`app.run_test()` 返回的 `pilot` 是 TestPilot，`await pilot.pause()` 等一个 event loop tick 让 Textual 处理挂起的事件。**教训**：写完 app mount 后必须 `await pilot.pause()`，否则 widget 还没渲染就被 query（导致 query_one 抛 NoMatches）。
+  - **"未测试的代码"边界**——`compose()` 方法的 CSS 字符串（4 块）没直接测（spec 只测了"Header 渲染 + Input 可 query"），但 CSS 是 Textual 的"声明式配置"——通过 widget 渲染间接覆盖。**教训**：CSS 是"配置而非逻辑"，不写 CSS 单元测试是合理的；测试只验 widget tree 正确即可。
+  - **Task 12 是"骨架"——所有交互逻辑留到 Task 13**——本次 commit 只搭 widget 树 + focus + header 渲染。**on_input_submitted / run_agent / _render_event / _set_status 全部 Task 13 才加**。**任务边界**：本次 commit 不写任何 input handling —— spec 显式说 "Task 13 will wire input → agent.run"，subagent 不超前。
+  - **integration test 跑得慢（1.47s）**——TUI app 启动 + run_test context 加载 + event loop setup 比 unit test 慢。本次 1 个 test 1.47s，38 个 unit test 1.72s 总耗时。**教训**：TUI/integration test 是"启动成本主导"，unit test 才是"逻辑成本主导"。未来加 TUI test 要考虑"合并多个 assertion 到一个 test"以摊薄启动成本。
 - **学到的教训**：
   - **spec 写"环境敏感"测试时必须显式 monkeypatch env var**——Task 4 的 handler 从 `os.environ.get("MINI_AGENT_WORKSPACE", ...)` 读 workspace，spec 写测试时漏了 `monkeypatch.setenv`。教训：**所有读 env var 的代码，测试必须显式设 env var**（用 pytest 的 `monkeypatch` fixture，自动 cleanup）。spec 作者容易默认"测试在容器里跑，环境已配好"——但 pytest 用的是 host 进程的环境，不是容器。Task 2/3 的 monkeypatch 教训（"测试资源必须被读取才算测试"）在 Task 4 演化成"**环境依赖必须被注入才算测试**"。
   - **测试文件顶部的 import 失败会让整个 module 收不到任何 item**——本次 RED 输出不是"5 failed"，而是 `Interrupted: 1 error during collection`。这是个**比"5 failed"更强的失败信号**：测试文件根本进不了 runner，因为 import 期就崩了。如果未来看到 collection error，第一反应是看 traceback 顶部的 `in <module>` 那一行——是 import 失败，不是 test 失败。**教训：test module 顶部的 import 越少越好**（"side-effect import"会让 RED 阶段无法精确报告哪个 test 红），但 `read_file` 这种 spec 显式要求的 import 不可避免。
