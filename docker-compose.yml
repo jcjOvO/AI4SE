@@ -1,0 +1,12 @@
+services:
+  miniagent:
+    build: .
+    image: mini-agent:latest
+    volumes:
+      - ./:/workspace
+    environment:
+      MINI_AGENT_WORKSPACE: /workspace
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY in .env or shell}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+    stdin_open: true
+    tty: true
