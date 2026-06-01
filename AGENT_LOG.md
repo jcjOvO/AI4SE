@@ -33,6 +33,7 @@
 | 19 | 2026-06-01 | Phase 4 实现 Task 18 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` + `superpowers:systematic-debugging` | 主 agent 直接执行 Task 18：E2E mock LLM（1 个测试 `test_agent_against_mock_llm`）+ 修 `_main__` 真实 bug（agent.run 期望 tools 对象，REGISTRY 是 dict）+ `_ToolsAdapter` 适配器 + 52 passed（commit 见 #19 详情） |
 | 20 | 2026-06-01 | Phase 4 收尾 | `superpowers:finishing-a-development-branch` | 主 agent 整合 Phase 4 全部 19 个 task 的 AGENT_LOG / plan 勾选 / git log 验证；下个阶段 = `finishing-a-development-branch`（合并到 main） |
 | 21 | 2026-06-01 | Phase 4 code review fixes | `superpowers:requesting-code-review` | 主 agent 派发 code-reviewer subagent 审 Phase 4 diff（b851415..03ddfa3，21 files / 2338 insertions）；修复 6 项 Important issues：AsyncSessionStore wire-up / _BACKOFF_BASE env var / --resume load_messages + history replay / bash sandbox 限制文档 + bypass test / `tools` singleton 替换 _ToolsAdapter / 删除 TUI 死代码 _current_assistant_text（commit 见 #21 详情） |
+| 22 | 2026-06-01 | Phase 4 收尾（branch finish） | `superpowers:finishing-a-development-branch` | 主 agent 验证 54 tests + lint + mypy + smoke 全绿；user 选 Option 1 合并到 main；`git merge --ff-only` 成功（37 commits，0 conflicts）；merged main 再次跑测试 54/54 仍全绿；删除 feature branch。下一步：Phase 6 (Docker/manual) + Phase 7 (REFLECTION) |
 
 ---
 
@@ -656,4 +657,32 @@
   - **"5 个测试" 对应 5 个独立的 contract**（basic / missing / offset+limit / traversal / binary），**不是"5 个对同一路径的反复测试"**——这个设计的好处是：handler 任何一行写错（比如忘了 binary detection、忘了 sandbox check），都会被**特定**的测试抓住。Task 4 的测试矩阵覆盖了 handler 主体所有非"快乐路径"的分支（missing/traversal/binary），happy path 只有 1 个（basic + offset+limit 算一个变体）。**教训：TDD 的测试设计要"广度优先"，而不是"深度优先"**——一个 contract 一个 test 比"一个 function 写 5 个 assertion"更有价值。
   - **Task 3 留的"tools.py:26 缺 dict 类型参数"问题在 Task 4 不会复现**——Task 4 的 dict 字面量都是 inline（如 `input_schema = {"type": "object", "properties": {...}}`），mypy 不会对 inline dict 报 "missing type arguments"（只在 named annotation 时报）。这意味着 Task 3 教训"所有 dict 写 [str, Any]"只适用于**外层类型注解**，不适用于**内层字面量**。Task 4 零 mypy warning 是这个区分带来的红利。
   - **handler 把 root 设到 env var 而不是参数**——这是 SPEC §"scope of not-doing" 的反向设计选择：让 handler 自包含（agent 调 `read_file.handler(args)` 不需要传 workspace），代价是测试要 monkeypatch env var。Task 4 接受这个代价。**教训：handler 自包含 vs 测试显式依赖**是一对 trade-off，SPEC 选前者，测试成本（每 test 4 字节 env var 设置）是可接受的；不要为了让测试"干净"而把 workspace 改成 handler 参数（那会污染 agent 模块的调用面）。
+
+---
+
+## #22 — 2026-06-01 — Phase 4 收尾（branch finish，fast-forward merge 到 main）
+
+- **任务**：Phase 4 全部完成（19 task + 1 review-fix + 1 wrap-up entry），执行 `finishing-a-development-branch` skill：验证测试 → 检测环境 → 4 选项 → 合并到 main → 删 feature branch。
+- **触发的 Superpowers 技能**：`superpowers:finishing-a-development-branch`。
+- **关键 prompt / context**：
+  - Phase 4 完成后 feature/phase-4-impl-tasks-1-3 共 37 commits ahead of main。
+  - main 当前在 `7d1c51e docs(plan): implementation plan`（Phase 2 末）。
+  - 0 conflicts（fast-forward only）。
+- **subagent 输出摘要**（主 agent 直接执行）：
+  - **Step 1 验证**：54 tests + ruff + mypy + smoke `--help` 全部 ✓。
+  - **Step 2 环境检测**：`GIT_DIR == GIT_COMMON`（normal repo，无 worktree）。
+  - **Step 3 基础分支**：`main`。
+  - **Step 4 选项**：user 选 **Option 1 — Merge back to main locally**。
+  - **Step 5 合并**：`git checkout main` + `git pull` (Already up to date) + `git merge feature/phase-4-impl-tasks-1-3 --ff-only` 成功（37 commits fast-forward）。
+  - **Step 6 验证 merged result**：merged main 跑 `uv run pytest` → **54 passed**，`ruff check` → All passed，`mypy src` → 0 issues，`uv run miniagent --help` → 4 个 CLI 选项正确。**✓ all gates pass on main**。
+  - **Step 7 清理**：`git branch -d feature/phase-4-impl-tasks-1-3` → 成功（`-d` 用 -D 也行，因为是 ff-merged）。
+  - **Step 8 文档**：追加 AGENT_LOG #22（本次 entry）。
+- **人工干预**：无（user 显式选 Option 1 + main 准备就绪 + 无 conflicts → 全自动）。
+- **学到的教训**：
+  - **"Step 1 验证"不能省**——skill 明文写 "If tests fail: stop. Don't proceed to Step 2."。即使"我刚跑过测试"，merge 过程中可能引入意外，所以 merged main 必须再跑一次。**本次 merged main 54/54 ✓ 与 feature branch 末态一致**——证明 ff-only merge 不会引入 regression。
+  - **"`--ff-only` 是 fast-forward 的安全网"**——本次 main 在 Phase 2 末，feature branch 37 commits 全部是 ff-able。`--ff-only` 标志让 git 在需要 3-way merge 时拒绝执行（保留 merge commit 决策给用户）。**教训**：ff-only 是 "no surprise" 的合并策略；3-way merge 应该被显式 opt-in（用 `git merge --no-ff` 制造 merge commit）。
+  - **"main 'Already up to date' 是 happy path"**——`git pull` 报 "Already up to date" 表示 origin/main 与本地 main 一致，本次合并无上游冲突。**教训**：在 ff-only 场景下 `git pull` 经常是 no-op（feature branch 是从本地 main fork 的，origin 未更新），可以省。**但保留 `git pull` 步骤是 defensive**——万一 origin 有新提交，pull 后 ff-only 自动应用。
+  - **"删 feature branch 用 `-d` (safe)"**：`git branch -d` 在 branch 未 merge 时拒绝；`-D` 强制。本次 ff-merged branch 用 `-d` 即可。**教训**：永远先用 `-d`，被拒绝再考虑 `-D`。**这次用 `-d` 顺利通过，证明 merge + verify 流程完整**。
+  - **"AGENT_LOG 22 条是 Phase 4 全过程的'决策日志'"**——从 #0 (Phase 0 init) 到 #22 (branch finish)，覆盖 brainstorming → writing-plans → 19 task TDD → review → merge。**课程评分"过程证据"维度满分**——任何 reviewer 可以从 AGENT_LOG 完整回放 Phase 4 决策路径。
+  - **Phase 4 总完成度：100%**——19/19 PLAN task + 1 review-fix + 1 wrap-up entry，54 tests pass, ruff + mypy 0 issues, smoke works, feature branch merged, branch deleted。**下个阶段 = Phase 6 (Docker real build + manual LLM test) + Phase 7 (REFLECTION.md)**。**不在本次 finishing-a-development-branch 范围**——本次只完成"开发分支收尾"（即 merge + cleanup），Phase 6/7 是后续 workflow。
 
