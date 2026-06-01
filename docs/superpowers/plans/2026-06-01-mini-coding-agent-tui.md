@@ -3202,8 +3202,8 @@ git commit -m "docs: log Phase 4 implementation + tick plan checkboxes"
 - [x] Task 14: __main__ CLI
 - [x] Task 15: Dockerfile + compose
 - [x] Task 16: CI workflows
-- [ ] Task 17: README quick-start
-- [ ] Task 18: E2E mock LLM
+- [x] Task 17: README quick-start
+- [x] Task 18: E2E mock LLM
 - [ ] Task 19: Final AGENT_LOG + tick plan
 
 **Progress:** 0 / 19
