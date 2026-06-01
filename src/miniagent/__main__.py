@@ -1,10 +1,96 @@
 """Entry point: python -m miniagent"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
 import sys
+from pathlib import Path
+from typing import Any
+
+from miniagent.config import load_config
+from miniagent.llm import LLMClient
+from miniagent.session import SessionStore
+from miniagent.tools import REGISTRY
 
 
-def main() -> int:
-    print("mini-agent: not yet implemented", file=sys.stderr)
-    return 1
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(prog="miniagent")
+    p.add_argument("--resume", help="Resume a session by id")
+    p.add_argument(
+        "--list",
+        dest="list_sessions",
+        action="store_true",
+        help="List recent sessions and exit",
+    )
+    p.add_argument("--model", help="Override model from config")
+    p.add_argument("--config", help="Path to user-level config.toml")
+    return p.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+
+    cli_overrides: dict[str, Any] = {}
+    if args.model:
+        cli_overrides.setdefault("llm", {})
+        if isinstance(cli_overrides.get("llm"), dict):
+            cli_overrides["llm"]["model"] = args.model
+
+    config = load_config(
+        user_path=Path(args.config) if args.config else None,
+        cli_overrides=cli_overrides if cli_overrides else None,
+    )
+
+    # Default workspace: $MINI_AGENT_WORKSPACE or cwd
+    ws = Path(os.environ.get("MINI_AGENT_WORKSPACE", Path.cwd()))
+    os.environ["MINI_AGENT_WORKSPACE"] = str(ws)
+
+    # Sessions dir
+    sessions_dir = config.paths.sessions_dir
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    store = SessionStore(sessions_dir / "sessions.db")
+
+    if args.list_sessions:
+        for meta in store.list_recent(20):
+            print(f"{meta.id}\t{meta.title or '(untitled)'}\t{meta.updated_at}")
+        store.close()
+        return 0
+
+    if args.resume:
+        session_id = args.resume
+        try:
+            store.get(session_id)
+        except KeyError:
+            print(f"No session with id {session_id!r}", file=sys.stderr)
+            store.close()
+            return 1
+    else:
+        session_id = store.create()
+        print(f"New session: {session_id}")
+
+    llm = LLMClient(
+        api_key=config.llm.api_key,
+        base_url=config.llm.base_url,
+        model=config.llm.model,
+    )
+
+    # Lazy import: textual is heavy
+    from miniagent.tui import AgentApp
+
+    app = AgentApp(
+        llm=llm,
+        tools=REGISTRY,
+        session=store,
+        session_id=session_id,
+        model_name=config.llm.model,
+    )
+    try:
+        app.run()
+    finally:
+        store.close()
+        asyncio.run(llm.close())
+    return 0
 
 
 if __name__ == "__main__":

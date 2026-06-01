@@ -28,6 +28,7 @@
 | 14 | 2026-06-01 | Phase 4 实现 Task 11 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 11：Agent 4 个测试（emits_assistant_delta_and_end_turn/executes_tool_and_reflows_result/reflows_tool_error_back_to_llm/propagates_cancellation）+ 5 个 Event dataclass + 3 个 Protocol + `_to_assistant_message` / `_to_tool_result_message` + `run()` 循环 + session hook + AgentError + CancelledError 透传（commit 见 #14 详情） |
 | 15 | 2026-06-01 | Phase 4 实现 Task 12 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 12：TUI skeleton 1 个测试（starts_and_shows_header_and_input）+ AgentApp 骨架 + Header/Log/Input/Status 4 个 widget + focus Input + 显示 session_id[:8]（commit 见 #15 详情） |
 | 16 | 2026-06-01 | Phase 4 实现 Task 13 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 13：TUI wire input 1 个测试（user_input_triggers_agent_run）+ RichLog 替换 VerticalScroll + `on_input_submitted` + `_run_agent` 后台 task + `_render_event` 5 事件类型 + `_set_status` + /exit /reset 命令（commit 见 #16 详情） |
+| 17 | 2026-06-01 | Phase 4 实现 Task 14 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 14：CLI 2 个测试（parse_args_defaults/parse_args_resume）+ argparse 4 选项 + module wiring（config/llm/session/tui）+ smoke `uv run miniagent --help`（commit 见 #17 详情） |
 
 ---
 
@@ -500,6 +501,33 @@
   - **`log.write(prefix); log.write(event.text)` 是 "newline-per-delta" 妥协**——理想是 "inline write"（text 接在 prefix 同一行），但 RichLog 的 write() 总是换行。**spec 注释说"For v1 we accept newline-per-delta"是合理的"接受不完美"决策**。**未来要 inline 渲染需要用 `RichLog.write(..., end=False)`**（如果 RichLog 支持 end 参数）。
   - **"未测试的代码"边界**——`/exit` / `/reset` 命令没测试覆盖，但 spec 显式要求。本次保留实现。**Task 14 集成测试或 E2E（Task 18）会覆盖**：发 `/exit` 字符串，期望 app 退出。**教训**：spec 显式给的功能即使没单元测试也保留——reviewer 在 TUI 实测时会用**。
   - **ruff auto-fix 的"`run as agent_run` import 拆分"行为**——`from miniagent.agent import (..., run as agent_run)` 与 `from miniagent.agent import (run as agent_run)` 是 ruff 等价的，但 ruff 偏好后者（独立 import block 表达"aliased import" 的语义独立）。**教训**：spec 写的"合并 import"在 ruff isort 下被拆开，是 ruff 的"语义分组" 偏好，subagent 不要合并回 spec 写法**。
+
+---
+
+## #17 — 2026-06-01 — Phase 4：实现 Task 14（`__main__.py` CLI，argparse + module wiring，TDD + smoke）
+
+- **任务**：按 PLAN Task 14 严格 TDD 实现 CLI。文件：`src/miniagent/__main__.py`（完全重写：argparse 4 选项 + module wiring config/llm/session/tui）+ `tests/unit/test_main.py`（新文件，2 个测试）。2 个测试覆盖：(1) `parse_args()` 默认（无 resume / 无 --list / 无 --model）；(2) `parse_args()` `--resume abc-123` 正确解析。**smoke test**：`uv run miniagent --help` 输出 usage 含 4 个选项。
+- **触发的 Superpowers 技能**：
+  - `superpowers:test-driven-development`（red→green→refactor，1 轮修复）
+  - `superpowers:subagent-driven-development`（主 agent 直接执行）
+  - `superpowers:verification-before-completion`（smoke test `uv run miniagent --help`）
+- **subagent 输出摘要**（主 agent 直接执行）：
+  - **Step 1 RED 证据**：`uv run pytest tests/unit/test_main.py -v` → `ImportError: cannot import name 'parse_args' from 'miniagent.__main__'`。RED 触发。
+  - **Step 2 GREEN #1**：重写 `__main__.py`（argparse + module wiring + 错误处理）。pytest → `2 passed, 1 ruff 2 errors` (unused `os`/`sys` in test_main.py)。
+  - **Step 3 GREEN #2（ruff auto-fix）**：`uv run ruff check --fix src tests` 自动删除 `test_main.py` 顶部未用的 `os`/`sys` import。`ruff check` → `All checks passed!`。
+  - **Step 4 全量回归**：`uv run pytest` → `51 passed in 1.68s`（49 prior + 2 new），无回归。
+  - **Step 5 mypy 零偏离**：`mypy src` → `Success: no issues found in 8 source files`。
+  - **Step 6 smoke test**：`uv run miniagent --help` → 输出 usage 含 4 个选项（`--resume RESUME` / `--list` / `--model MODEL` / `--config CONFIG`）。✓
+- **人工干预**（1 项 plan 之外的修复）：
+  - **`cli_overrides` typing 改进**——spec 写 `cli_overrides: dict = {}` 触发 mypy `Missing type arguments for generic type "dict"`。改为 `dict[str, Any]`。**教训**：Task 2/3/9/11 教训"`dict` 必加 `[str, Any]`" 在 Task 14 再次验证——是项目级硬规则**。
+  - **`store.close()` 在所有 early-return 路径**——spec 模板只在 `app.run()` 的 `finally` 调 `store.close()`，但 `--list` 与 `--resume missing` 路径不调 `app.run()`，会 leak SQLite 连接。**修复**：在两个 early-return 路径前各加一行 `store.close()`。**这是 spec 模板遗漏**——subagent 主动补全"资源清理完整性"。
+- **学到的教训**：
+  - **smoke test 是 Task 14 的"必做收尾"**——spec Step 5 显式说 "Smoke-test CLI `--help`"。本次执行：跑 `uv run miniagent --help`，确认 usage 文本含 4 个选项。**教训**：CLI task 必有 `--help` smoke——比单元测试更直接验证 "argparse 真的注册到 entry point"。**future reviewer 看到 Task 14 commit 包含 smoke test 记录，是 subagent 严格按 spec 的证据**。
+  - **"resource leak 修复"是 spec 模板常见遗漏**——spec 给的 `__main__.py` 模板在 `app.run()` 之外的 early-return 路径不释放 `store`（SQLite 连接）。**本次主动补 `store.close()` 在两条 early-return 路径**。**教训**：CLI/main 函数是"多 early-return 路径"，每条路径都要保证 resource cleanup。**建议 future subagent 写 CLI 模板时，把 resource 声明 + cleanup 集中到 `try/finally` 块**——比散在每条 early-return 前更安全。
+  - **`argparse.Namespace` 没有 `--list-sessions` 选项**——`p.add_argument("--list", dest="list_sessions", ...)` 把 CLI flag `--list` 映射到 `args.list_sessions`。spec 模板显式 `dest="list_sessions"` 是为了让 `args.list_sessions` 是 bool（`store_true` action）。**教训**：argparse 的 `dest` 参数是 "Python 标识符命名空间"，与 CLI flag 名解耦——CLI 用 kebab-case (`--list-sessions`)，Python 用 snake_case (`args.list_sessions`)。本次 spec 故意 `--list` 单 flag，避免歧义。
+  - **`asyncio.run(llm.close())` 在 finally 块**——TUI `app.run()` 退出后，需要关闭 LLM 的 `httpx.AsyncClient` 连接池。`asyncio.run(...)` 创建一个新的 event loop 来 await 异步 close，destroy 后清空。**教训**：CLI 退出路径要关闭所有 async resource——`httpx.AsyncClient` 不 close 会留下 socket 警告（Windows 上尤其烦人）。**未来 subagent 写 CLI 模板时，列出所有 async resource（httpx client / db connection / queue），保证每条退出路径都清理**。
+  - **`from miniagent.tui import AgentApp` 在 main 内部 lazy import**——spec 显式注释"textual is heavy"。**理由**：TUI 模块 import 触发 textual 依赖链（很多 stdlib + 第三方）；lazy import 让 `--list` / `--help` 等"不启动 TUI" 的命令不必付 import 成本。**教训**：CLI main 函数内部 import 是"按需加载"的标准 pattern——比"全部 top-level import"更快启动非交互命令。
+  - **Task 14 完成 = 5 个核心模块 + 1 helper 全部就绪**——config (T2) / tools (T3-T7) / session (T8/T8b) / llm (T9/T10) / agent (T11) / tui (T12/T13) 全部实现 + 测试。本 task 把所有模块 wire 到 `__main__.py` entry point。**第一次"可运行"的 mini-agent**：跑 `uv run miniagent` 实际会启动 TUI（虽然需要真实 ANTHROPIC_API_KEY 才能让 LLM 工作）。**这是 Phase 4 实现的"第一里程碑"——M1 满足"代码可启动"**。
 - **学到的教训**：
   - **spec 写"环境敏感"测试时必须显式 monkeypatch env var**——Task 4 的 handler 从 `os.environ.get("MINI_AGENT_WORKSPACE", ...)` 读 workspace，spec 写测试时漏了 `monkeypatch.setenv`。教训：**所有读 env var 的代码，测试必须显式设 env var**（用 pytest 的 `monkeypatch` fixture，自动 cleanup）。spec 作者容易默认"测试在容器里跑，环境已配好"——但 pytest 用的是 host 进程的环境，不是容器。Task 2/3 的 monkeypatch 教训（"测试资源必须被读取才算测试"）在 Task 4 演化成"**环境依赖必须被注入才算测试**"。
   - **测试文件顶部的 import 失败会让整个 module 收不到任何 item**——本次 RED 输出不是"5 failed"，而是 `Interrupted: 1 error during collection`。这是个**比"5 failed"更强的失败信号**：测试文件根本进不了 runner，因为 import 期就崩了。如果未来看到 collection error，第一反应是看 traceback 顶部的 `in <module>` 那一行——是 import 失败，不是 test 失败。**教训：test module 顶部的 import 越少越好**（"side-effect import"会让 RED 阶段无法精确报告哪个 test 红），但 `read_file` 这种 spec 显式要求的 import 不可避免。
