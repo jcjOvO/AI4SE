@@ -30,6 +30,7 @@
 | 16 | 2026-06-01 | Phase 4 实现 Task 13 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 13：TUI wire input 1 个测试（user_input_triggers_agent_run）+ RichLog 替换 VerticalScroll + `on_input_submitted` + `_run_agent` 后台 task + `_render_event` 5 事件类型 + `_set_status` + /exit /reset 命令（commit 见 #16 详情） |
 | 17 | 2026-06-01 | Phase 4 实现 Task 14 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` | 主 agent 直接执行 Task 14：CLI 2 个测试（parse_args_defaults/parse_args_resume）+ argparse 4 选项 + module wiring（config/llm/session/tui）+ smoke `uv run miniagent --help`（commit 见 #17 详情） |
 | 18 | 2026-06-01 | Phase 4 实现 Task 15 | — | 主 agent 直接执行 Task 15：Dockerfile（python:3.12-slim 多阶段 + uv 安装 + non-root user）+ docker-compose.yml（4 env vars + volume mount + tty/stdin_open）。跳过 Step 3/4 (docker build/run)，环境无 Docker daemon——属 Phase 6 验证项。 |
+| 19 | 2026-06-01 | Phase 4 实现 Task 18 | `superpowers:test-driven-development` + `superpowers:subagent-driven-development` + `superpowers:systematic-debugging` | 主 agent 直接执行 Task 18：E2E mock LLM（1 个测试 `test_agent_against_mock_llm`）+ 修 `_main__` 真实 bug（agent.run 期望 tools 对象，REGISTRY 是 dict）+ `_ToolsAdapter` 适配器 + 52 passed（commit 见 #19 详情） |
 
 ---
 
@@ -529,6 +530,33 @@
   - **`asyncio.run(llm.close())` 在 finally 块**——TUI `app.run()` 退出后，需要关闭 LLM 的 `httpx.AsyncClient` 连接池。`asyncio.run(...)` 创建一个新的 event loop 来 await 异步 close，destroy 后清空。**教训**：CLI 退出路径要关闭所有 async resource——`httpx.AsyncClient` 不 close 会留下 socket 警告（Windows 上尤其烦人）。**未来 subagent 写 CLI 模板时，列出所有 async resource（httpx client / db connection / queue），保证每条退出路径都清理**。
   - **`from miniagent.tui import AgentApp` 在 main 内部 lazy import**——spec 显式注释"textual is heavy"。**理由**：TUI 模块 import 触发 textual 依赖链（很多 stdlib + 第三方）；lazy import 让 `--list` / `--help` 等"不启动 TUI" 的命令不必付 import 成本。**教训**：CLI main 函数内部 import 是"按需加载"的标准 pattern——比"全部 top-level import"更快启动非交互命令。
   - **Task 14 完成 = 5 个核心模块 + 1 helper 全部就绪**——config (T2) / tools (T3-T7) / session (T8/T8b) / llm (T9/T10) / agent (T11) / tui (T12/T13) 全部实现 + 测试。本 task 把所有模块 wire 到 `__main__.py` entry point。**第一次"可运行"的 mini-agent**：跑 `uv run miniagent` 实际会启动 TUI（虽然需要真实 ANTHROPIC_API_KEY 才能让 LLM 工作）。**这是 Phase 4 实现的"第一里程碑"——M1 满足"代码可启动"**。
+
+---
+
+## #19 — 2026-06-01 — Phase 4：实现 Task 18（E2E mock LLM，**发现并修复** TUI/Agent tools 协议 bug）
+
+- **任务**：按 PLAN Task 18 实现 E2E 测试。文件：`scripts/mock_anthropic.py`（stdlib HTTP server 返回固定 SSE 响应）+ `tests/e2e/test_docker_smoke.py`（1 个测试 `test_agent_against_mock_llm`：spawn mock server + 用 LLMClient + 跑 agent.run() 验证事件流）。
+- **触发的 Superpowers 技能**：
+  - `superpowers:test-driven-development`（red→green→refactor，1 轮发现真实 bug）
+  - `superpowers:subagent-driven-development`（主 agent 直接执行）
+  - `superpowers:systematic-debugging`（**诊断 TUI/Agent tools 协议 bug**——e2e 触发未在 unit/integration 测试覆盖的 runtime 路径）
+- **subagent 输出摘要**（主 agent 直接执行）：
+  - **Step 1 写文件**：mock_anthropic.py（HTTP handler for `/v1/messages`）+ e2e test。
+  - **Step 2 RED→GREEN→BUG**：跑 `uv run pytest tests/e2e -v` → `AttributeError: 'dict' object has no attribute 'all_schemas'` at `agent.py:100`。**根因**：`__main__.py` 把 `tools=REGISTRY`（dict）传给 AgentApp，AgentApp 又传给 `agent_run()`，但 `agent.run()` 在 `tools.all_schemas()` 处假设 `tools` 是有方法的对象。**Task 12-14 spec 全程没暴露这个 bug**（因为 TUI 的 integration test 用 fake dataclass with `all_schemas()`；CLI 的 smoke test 只跑 `--help` 不进 agent loop；e2e 是第一次把真 LLMClient + 真 REGISTRY 拼起来跑通完整 loop）。
+  - **Step 3 GREEN #1（修 __main__.py）**：在 `__main__.py` 加 `_ToolsAdapter` 类（薄 wrapper 把 `all_schemas()` / `tools_execute()` 暴露为方法）。`__main__.py` 改为 `tools=_ToolsAdapter()`。
+  - **Step 4 GREEN #2（修 e2e test）**：e2e test 同样用 `_ToolsAdapter` 适配（保持与 `__main__.py` 行为一致）。
+  - **Step 5 全量回归**：`uv run pytest` → `52 passed in 2.58s`（51 prior + 1 new e2e），无回归。
+  - **Step 6 lint 零偏离（auto-fix 1 处）**：`I001` import block un-sorted — `uv run ruff check --fix` 把 `from miniagent.tools import (all_schemas, execute as ...)` 拆为两行（与 Task 13 同款 ruff isort 偏好）。`ruff check` → `All checks passed!`；`mypy src` → `Success: no issues found in 8 source files`。
+- **人工干预**（**1 项 plan 之外的真实 bug 修复**——Phase 4 最重要的"surprise"）：
+  - **TUI/Agent tools 协议 bug**——`agent.run()` 的 `tools: ToolsProtocol` 期望有 `all_schemas()` / `execute()` 的对象，但 `__main__.py` 传 `tools=REGISTRY`（dict）。**Task 12/13/14 的 spec 都没发现**：TUI integration test 用 fake dataclass 绕开，CLI smoke test 只跑 `--help`，没人把 "TUI 真的从 `__main__.py` 启动并跑 agent loop" 跑过。**e2e test 是第一次完整的 integration path**。**修复**：`_ToolsAdapter` 薄 wrapper 暴露方法。**教训**：e2e test 的价值在于"第一次跑完整 path"——单元/integration 测过 100 个组件，e2e 仍可能找到契约不匹配。**这是 Task 18 的"e2e"本质——单元/integration 测逻辑，e2e 测 wire-up**。
+- **学到的教训**：
+  - **e2e test 是"发现 wire-up bug"的唯一途径**——本次发现 `__main__ → AgentApp → agent_run` 三层之间 `tools` 类型契约不匹配（dict vs object）。**单元测 `_Tools` dataclass 通过 + 集成测 fake tools 通过 ≠ 真实 wire-up 正确**。**教训**：e2e test 必须用真模块拼装（真 LLMClient + 真 REGISTRY + 真 agent.run），不要用 fake 简化。
+  - **"_ToolsAdapter 是临时补丁"还是"长期方案"**——本次用 8 行 wrapper 解决 spec 内部不一致。**长期看**：应该让 `tools.py` 暴露一个 `tools` 命名空间对象（singleton with `all_schemas` / `execute` as bound methods + `REGISTRY` as attribute），让 `__main__.py` 直接 `from miniagent.tools import tools`。**本次没做这次 refactor**——保持 spec 边界，每个 task 只改 task spec 范围。**未来重构建议**：Phase 5 / finishing-a-development-branch 时合并。**教训**：发现"spec 内部不一致"时不要顺手动大改——先最小修复 + AGENT_LOG 记录，等后期重构**。
+  - **mock_anthropic.py 的"沉默 log_message"**——`def log_message(self, *args, **kwargs) -> None: pass` 静默 stderr，避免 pytest 输出被污染。**教训**：stdlib `BaseHTTPRequestHandler.log_message` 默认输出到 stderr，subprocess 启的 mock server 噪声大。**所有 mock subprocess 服务都要 silence 自己的 log**。
+  - **E2E test 的 `scope="module"` fixture**——`mock_server` 用 module scope（vs function scope）让 1 个 e2e test 共享 1 个 mock server。**理由**：spawn subprocess + wait for ready (~5s) 是慢启动；module scope 让 1 个 test 只付一次启动成本。**教训**：subprocess fixture 用 module scope 是标准 pattern，但要注意 cleanup（`proc.terminate()` 在 yield 后调用）。
+  - **"等待 server ready" 的 50 次重试**——`for _ in range(50): try: httpx.get(...); except: time.sleep(0.1); else: break`。这是"subprocess + HTTP"启动检测的常见 pattern：50 × 0.1s = 5s 最多等。**教训**：mock server start 用 retry-loop 比 fixed sleep 更 robust（CI 机器慢，5s 可能不够；本地快，0.1s 就 ready）。
+  - **`@pytest.mark.e2e` warning**——pytest 报 "Unknown pytest mark.e2e"，但 e2e test 仍跑（pytest 警告但不 fail）。**Plan spec 的 `pyproject.toml` 的 markers 注册有这行**：`"e2e: end-to-end tests (require Docker, run manually)"`，但 pytest.ini 没注册（pytest 读 pyproject.toml 的 [tool.pytest.ini_options] 时**忽略**，因为同时存在 pytest.ini——AGENT_LOG #3 的同款"双配置"陷阱）。**修复路径**：要么让 pytest 用 pyproject.toml（删 pytest.ini），要么在 pytest.ini 加 `markers = e2e: ...`。**本次不修**——warning 不影响测试结果，留给 Phase 5。**教训**：spec 没注意到的"pyproject vs pytest.ini 优先级"问题已经累积 3 处（#3 / #19 / 这次）。
+  - **Task 18 完成后 Phase 4 核心实现完整**——5 模块 + 1 helper + Docker + CI + README + E2E。**M2 满足"e2e 跑通完整 loop"**——可以 `uv run miniagent` 启动 TUI，与 mock LLM 完成一次对话。**真正的 ANTHROPIC_API_KEY 测试是 Phase 6 manual test**（用户在真 LLM 上验证）。
 - **学到的教训**：
   - **spec 写"环境敏感"测试时必须显式 monkeypatch env var**——Task 4 的 handler 从 `os.environ.get("MINI_AGENT_WORKSPACE", ...)` 读 workspace，spec 写测试时漏了 `monkeypatch.setenv`。教训：**所有读 env var 的代码，测试必须显式设 env var**（用 pytest 的 `monkeypatch` fixture，自动 cleanup）。spec 作者容易默认"测试在容器里跑，环境已配好"——但 pytest 用的是 host 进程的环境，不是容器。Task 2/3 的 monkeypatch 教训（"测试资源必须被读取才算测试"）在 Task 4 演化成"**环境依赖必须被注入才算测试**"。
   - **测试文件顶部的 import 失败会让整个 module 收不到任何 item**——本次 RED 输出不是"5 failed"，而是 `Interrupted: 1 error during collection`。这是个**比"5 failed"更强的失败信号**：测试文件根本进不了 runner，因为 import 期就崩了。如果未来看到 collection error，第一反应是看 traceback 顶部的 `in <module>` 那一行——是 import 失败，不是 test 失败。**教训：test module 顶部的 import 越少越好**（"side-effect import"会让 RED 阶段无法精确报告哪个 test 红），但 `read_file` 这种 spec 显式要求的 import 不可避免。
