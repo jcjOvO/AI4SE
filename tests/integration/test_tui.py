@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from textual.widgets import Input, RichLog, Static
@@ -39,7 +40,7 @@ async def test_app_starts_and_shows_header_and_input() -> None:
 class _Msg:
     text: str = ""
     is_error: bool = False
-    calls: list | None = None
+    calls: list[Any] | None = None
 
 
 @dataclass

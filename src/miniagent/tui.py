@@ -25,6 +25,7 @@ from miniagent.agent import (
 )
 
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_SHORTCUTS = "/exit · /reset · Ctrl+C"
 _CSS_PATH = Path(__file__).parent / "tui.css"
 
 
@@ -83,7 +84,7 @@ class AgentApp(App[None]):
     # ── Status bar helpers ─────────────────────────────────
 
     def _update_status(self, text: str) -> None:
-        self.query_one("#status", Static).update(text)
+        self.query_one("#status", Static).update(f"{text}    {_SHORTCUTS}")
 
     def _start_spinner(self, status_text: str) -> None:
         self._spinner_idx = 0
