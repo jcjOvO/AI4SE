@@ -35,6 +35,8 @@
 | 21 | 2026-06-01 | Phase 4 code review fixes | `superpowers:requesting-code-review` | 主 agent 派发 code-reviewer subagent 审 Phase 4 diff（b851415..03ddfa3，21 files / 2338 insertions）；修复 6 项 Important issues：AsyncSessionStore wire-up / _BACKOFF_BASE env var / --resume load_messages + history replay / bash sandbox 限制文档 + bypass test / `tools` singleton 替换 _ToolsAdapter / 删除 TUI 死代码 _current_assistant_text（commit 见 #21 详情） |
 | 22 | 2026-06-01 | Phase 4 收尾（branch finish） | `superpowers:finishing-a-development-branch` | 主 agent 验证 54 tests + lint + mypy + smoke 全绿；user 选 Option 1 合并到 main；`git merge --ff-only` 成功（37 commits，0 conflicts）；merged main 再次跑测试 54/54 仍全绿；删除 feature branch。下一步：Phase 6 (Docker/manual) + Phase 7 (REFLECTION) |
 | 23 | 2026-06-13 | Phase 6 沙箱路径修复 | `superpowers:brainstorming` | 用户要求本地运行时沙箱限制在 `<cwd>/workspace/` 子目录；brainstorming 3 轮澄清后简化为只改 `__main__.py` 默认值；50 tests passed + lint clean |
+| 24 | 2026-06-13 | Phase 6 多轮对话修复 | — | `_run_agent` 每次重建 messages 导致 LLM 失忆；改为 `_messages` 持续累积 + 用户消息持久化到 session；53 tests passed |
+| 25 | 2026-06-13 | Phase 6 TUI 美化 | `superpowers:brainstorming` + `superpowers:writing-plans` + `superpowers:subagent-driven-development` | 全面美化 TUI：Catppuccin Mocha 暗色主题 + 面板式消息 + token 用量显示 + spinner 状态栏；6 tasks，subagent-driven；55 tests passed |
 
 ---
 
@@ -714,4 +716,54 @@
   - **`MINI_AGENT_WORKSPACE` env var 覆盖是向后兼容的关键**——Docker 中一般设置此 env var 为 `/workspace`，本地默认改为 `cwd/workspace` 后，Docker 行为不受影响。**env var > 默认值**的优先级链保证了向后兼容。
   - **`mkdir(parents=True, exist_ok=True)` 是防御性启动逻辑**——本地首次运行时 `workspace/` 不存在，自动创建比报错退出更友好。`exist_ok=True` 防止并发启动时的竞态。
   - **`Path.cwd() / "workspace"` 在 Docker 中会变成 `/workspace/workspace`**——这正是为什么需要 `MINI_AGENT_WORKSPACE` env var 覆盖。Docker 的 `Dockerfile` 应确保设置此 env var。**教训：默认值设计要考虑"在不同运行环境下的实际 cwd"——Docker 的 cwd 是 `/workspace`，本地的 cwd 是项目根目录**。
+
+---
+
+## #24 — 2026-06-13 — Phase 6：多轮对话修复（TUI 消息累积 + 用户消息持久化）
+
+- **任务**：修复 agent 不能正常支持多次对话的问题——每次用户发新消息，LLM 都"失忆"，看不到之前的对话上下文。
+- **触发的 Superpowers 技能**：无（直接 bug fix，未走 brainstorming/planning 流程）。
+- **关键 prompt / context**：
+  - 用户原始请求："目前的agent似乎不能正常支持多次对话，没有会话"
+  - 根因定位：`tui.py:138-139` 的 `_run_agent` 每次用 `list(self._initial_messages)` 创建全新消息列表，前几轮对话历史丢失
+  - 次要问题：用户消息未被 `session.append_message` 持久化，只有 assistant/tool_result 消息入库
+- **subagent 输出摘要**（主 agent 直接执行）：
+  - **Bug #1（消息重置）**：`_run_agent` 每次 `messages = list(self._initial_messages)` → 改为实例级 `self._messages` 持续累积，`_run_agent` 直接 `append` 用户消息到 `self._messages`，agent_run 也在同一列表上追加 assistant/tool_result
+  - **Bug #2（用户消息未持久化）**：`_run_agent` 只在 agent loop 内部持久化 assistant/tool_result 消息，用户消息漏存 → 在 `_run_agent` 入口加 `session.append_message(session_id, user_msg)`
+  - **`/reset` 同步清空**：`on_input_submitted` 的 `/reset` 分支加 `self._messages.clear()`，避免 reset 后旧历史仍被传给 LLM
+  - **变量重命名**：`self._initial_messages` → `self._messages`（语义更准确：不再是"初始消息"，而是"完整对话历史"）
+  - **验证**：`uv run pytest tests/unit -v` → **50 passed**；`uv run pytest tests/integration -v` → **3 passed**；`ruff check` + `ruff format --check` → All passed。
+- **人工干预**：无。
+- **学到的教训**：
+  - **`_run_agent` 的 messages 生命周期是 TUI 多轮对话的核心**——agent loop 内部 `messages.append(assistant_msg)` 只影响当次 `_run_agent` 调用的局部变量，调用结束后丢弃。要支持多轮，必须把 messages 提升为实例属性。**教训：TUI 的"对话状态"必须是实例级（跨调用存活），不能是方法级（调用结束即销毁）**。
+  - **用户消息持久化容易被遗漏**——agent loop 只负责"assistant 回复 + tool 结果"的持久化（`agent.py:107` 和 `agent.py:128`），用户消息的持久化是调用方（TUI）的责任。**教训：session 持久化的"入口消息"和"出口消息"分属不同层——agent loop 持久化产出，TUI 持久化输入**。
+  - **`/reset` 必须同时清内存和提示用户**——只清 session 不清内存，下次 `_run_agent` 仍会把旧历史发给 LLM。只清内存不清 session，`--resume` 恢复时会看到已"reset"的历史。**本次只清内存（`self._messages.clear()`），session 保留**——这是合理的：reset 是"当前会话重启"，不是"删除历史记录"。
+  - **Task 21 code review 时 `_current_assistant_text` 死代码被删除，但 `_initial_messages` 的"每次重建"问题没被发现**——因为 code review 只看静态代码，不跑"用户连续发 2 条消息"的动态场景。**教训：code review 适合找"死代码 / 类型错 / 缺失 wire-up"，不适合找"状态生命周期 bug"——后者需要 e2e 或手动测试**。
+
+---
+
+## #25 — 2026-06-13 — Phase 6：TUI 美化（暗色主题 + 面板 + spinner + token 用量）
+
+- **任务**：全面美化 TUI——从"功能可用"提升到"视觉精致"。方案 B：TUI 全面美化 + 小改下层透传 usage。
+- **触发的 Superpowers 技能**：`superpowers:brainstorming`（4 轮澄清：美化方向 → 视觉风格 → 聊天展示 → 状态栏内容 → 范围约束）+ `superpowers:writing-plans`（6 task 计划）+ `superpowers:subagent-driven-development`（subagent 逐 task 实现 + 两轮 review）。
+- **关键 prompt / context**：
+  - 用户原始请求："目前的终端美观度不够，请你想想怎么美化一下"
+  - 4 轮澄清后确定：暗色系 + 面板式消息 + 全部状态信息（spinner/token/耗时/session）+ 允许小改下层接口
+  - 3 方案对比：A 纯 CSS / B CSS+usage 透传 / C 可配置主题 → 用户选 B
+- **SPEC**：`docs/superpowers/specs/2026-06-13-tui-beautification-design.md`（commit `0eaa881`）
+- **PLAN**：`docs/superpowers/plans/2026-06-13-tui-beautification.md`（commit `64888ad`，6 tasks）
+- **subagent 输出摘要**：
+  - **Task 1**（llm.py）：`StepUsage` dataclass + SSE 捕获 `message_start`/`message_delta` usage → commit `f929987`
+  - **Task 2**（agent.py）：`EndTurn` 加 `input_tokens`/`output_tokens` + `run()` 透传 → commit `4e19ac5`
+  - **Task 3**（tui.css）：Catppuccin Mocha 暗色主题 CSS → commit `06f8a03`
+  - **Task 4+5**（tui.py）：全面重写——header token 显示 + braille spinner + Panel 消息渲染 → commit `a12d41f`
+  - **Code review 修复**：CancelledError re-raise + test type annotations + AgentError spinner stop → commit `5d2b6fd`
+  - **Spec review 修复**：status bar 快捷键提示 → commit `4325304`
+- **人工干预**：无（全流程自动化）。
+- **最终验证**：55 tests passed · ruff 0 error · mypy 0 error
+- **学到的教训**：
+  - **Subagent 合并相邻 task 可避免冲突**——Task 4 和 Task 5 都改 tui.py，合并为一个 subagent 派发避免了文件冲突。**教训：同一文件的多个 task 应合并执行**。
+  - **Spec review 的"误读"需要主 agent 判断**——reviewer 错误地认为 token 用量应在 status bar（实际 spec §4.1 明确写在 header）。主 agent 需要对照 spec 原文判断 reviewer 发现是否成立。**教训：reviewer 不是 infallible，主 agent 必须验证每个 finding 对照 spec**。
+  - **CancelledError re-raise 是项目级硬约束**——code reviewer 发现 `_run_agent` 吞了 CancelledError，违反 CLAUDE.md convention #10。**教训：每次重写 async 方法都要检查 CancelledError 处理**。
+  - **Test mock 的类型注解不能偷懒**——`_LLM` 和 `_Tools` 用 `@dataclass` 但缺少类型注解，mypy strict 会报 9 个错。**教训：测试 mock 也要写完整类型注解，不能因为"只是测试"就偷懒**。
 
