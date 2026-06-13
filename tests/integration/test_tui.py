@@ -16,7 +16,7 @@ async def test_app_starts_and_shows_header_and_input() -> None:
         tools=None,
         session=None,
         session_id="test-123",
-        model_name="claude-x",  # type: ignore[arg-type]
+        model_name="claude-x",
     )
     async with app.run_test() as pilot:
         header = app.query_one("#header", Static)
@@ -36,28 +36,29 @@ async def test_app_starts_and_shows_header_and_input() -> None:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class _Msg:
-    text: str = ""
-    is_error: bool = False
-    calls: list[Any] | None = None
-
-
-@dataclass
 class _LLM:
-    async def stream_step(self, messages, tools):
+    async def stream_step(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> tuple[str, list[Any], None]:
         last = messages[-1]
         content = last.get("content", "") if isinstance(last.get("content"), str) else "hi"
         return "Echo: " + content, [], None
 
 
-@dataclass
 class _Tools:
-    def all_schemas(self) -> list:
+    def all_schemas(self) -> list[dict[str, Any]]:
         return []
 
-    async def execute(self, name, args):
+    async def execute(self, name: str, args: dict[str, Any]) -> Any:
         return _Msg()
+
+
+@dataclass
+class _Msg:
+    text: str = ""
+    is_error: bool = False
+    output: str = ""
+    error: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -68,8 +69,8 @@ class _Tools:
 @pytest.mark.asyncio
 async def test_user_input_triggers_agent_run() -> None:
     app = AgentApp(
-        llm=_LLM(),  # type: ignore[arg-type]
-        tools=_Tools(),  # type: ignore[arg-type]
+        llm=_LLM(),
+        tools=_Tools(),
         session=None,
         session_id="s-1",
     )
@@ -100,7 +101,7 @@ async def test_user_input_triggers_agent_run() -> None:
 async def test_initial_messages_replayed_on_mount() -> None:
     """When --resume passes initial_messages, they render on mount
     so the user sees prior context. New user input is then appended."""
-    history = [
+    history: list[dict[str, Any]] = [
         {"role": "user", "content": "previous question"},
         {
             "role": "assistant",
@@ -117,8 +118,8 @@ async def test_initial_messages_replayed_on_mount() -> None:
         },
     ]
     app = AgentApp(
-        llm=_LLM(),  # type: ignore[arg-type]
-        tools=_Tools(),  # type: ignore[arg-type]
+        llm=_LLM(),
+        tools=_Tools(),
         session=None,
         session_id="s-2",
         initial_messages=history,

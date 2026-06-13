@@ -219,6 +219,7 @@ class AgentApp(App[None]):
         except asyncio.CancelledError:
             self.query_one(RichLog).write("[yellow]interrupted[/yellow]")
             self._stop_spinner("interrupted")
+            raise
         except Exception as e:
             self.query_one(RichLog).write(f"[red]error: {e}[/red]")
             self._stop_spinner("error")
@@ -272,4 +273,5 @@ class AgentApp(App[None]):
             right = f"{self._format_tokens(self._total_input, self._total_output)} · {elapsed:.1f}s"
             self._update_header(right)
         elif isinstance(event, AgentError):
+            self._stop_spinner("error")
             log.write(f"[red]agent error: {event.message}[/red]")
