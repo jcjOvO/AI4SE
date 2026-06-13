@@ -67,6 +67,9 @@ def _to_assistant_message(text: str, tool_calls: list[Any]) -> dict[str, Any]:
         content.append({"type": "text", "text": text})
     for tc in tool_calls:
         content.append({"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.input})
+    # Anthropic API requires non-empty content for all messages
+    if not content:
+        content.append({"type": "text", "text": ""})
     return {"role": "assistant", "content": content}
 
 

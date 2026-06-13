@@ -75,6 +75,30 @@ async def test_run_emits_assistant_delta_and_end_turn_on_text_only_response() ->
     assert events[1].output_tokens == 0
 
 
+async def test_run_handles_empty_text_response() -> None:
+    """When LLM returns empty text and no tool calls, message content must be non-empty.
+
+    Anthropic API requires all messages to have non-empty content.
+    """
+    llm = FakeLLM(responses=[("", [], None)])
+    tools = FakeTools(by_name={})
+    events: list[Event] = []
+
+    msgs = await run(
+        messages=[{"role": "user", "content": "hi"}],
+        llm=llm,  # type: ignore[arg-type]
+        tools=tools,  # type: ignore[arg-type]
+        on_event=events.append,
+    )
+    assert len(msgs) == 2  # user + assistant
+
+    # Verify assistant message has non-empty content
+    assistant_msg = msgs[1]
+    assert assistant_msg["role"] == "assistant"
+    assert len(assistant_msg["content"]) > 0
+    assert assistant_msg["content"][0]["type"] == "text"
+
+
 async def test_run_end_turn_carries_usage_from_llm() -> None:
     """When LLM returns StepUsage, EndTurn should carry the token counts."""
     from miniagent.llm import StepUsage

@@ -38,6 +38,7 @@
 | 24 | 2026-06-13 | Phase 6 多轮对话修复 | — | `_run_agent` 每次重建 messages 导致 LLM 失忆；改为 `_messages` 持续累积 + 用户消息持久化到 session；53 tests passed |
 | 25 | 2026-06-13 | Phase 6 TUI 美化 | `superpowers:brainstorming` + `superpowers:writing-plans` + `superpowers:subagent-driven-development` | 全面美化 TUI：Catppuccin Mocha 暗色主题 + 面板式消息 + token 用量显示 + spinner 状态栏；6 tasks，subagent-driven；55 tests passed |
 | 26 | 2026-06-13 | Phase 6 Bug 修复 | `superpowers:systematic-debugging` | 修复 tool_use 缺少 tool_result 导致 API 报错的问题；根因：工具执行异常时 assistant 消息已添加但 tool_result 未添加；修复：延迟添加 assistant 消息直到所有工具结果收集完毕；57 tests passed |
+| 27 | 2026-06-13 | Phase 6 Bug 修复 | `superpowers:systematic-debugging` | 修复空 content 消息导致 API 报错 "all messages must have non-empty content"；根因：LLM 返回空 text 且无 tool_calls 时，assistant 消息 content 为空列表；修复：确保 content 永远非空；57 tests passed |
 
 ---
 
@@ -806,4 +807,40 @@
   - **"先添加再执行"是错误的模式**——应该"先执行再添加"，确保所有依赖数据都准备好后再修改共享状态。这个模式适用于任何"原子性操作"场景。
   - **异常处理要考虑消息完整性**——即使工具执行失败，也要创建一个 ErrorResult 来保持消息格式的完整性。这是"优雅降级"的一部分。
   - **系统化调试比随机修复更高效**——按照 Phase 1（根因分析）→ Phase 2（模式分析）→ Phase 3（假设验证）→ Phase 4（实现修复）的流程，15 分钟就定位并修复了问题。
+
+---
+
+## #27 — 2026-06-13 — Phase 6：修复空 content 消息导致 API 报错
+
+- **任务**：修复 Anthropic API 报错 "all messages must have non-empty content" 的问题。
+- **触发的 Superpowers 技能**：`superpowers:systematic-debugging`（4 阶段系统化调试流程）。
+- **关键 prompt / context**：
+  - 用户原始问题："出现了all messages must have non-empty content"
+  - 这是 Anthropic Messages API 的格式要求：所有消息必须有非空 content
+- **根因分析**（Phase 1: Root Cause Investigation）：
+  - **问题场景**：
+    1. LLM 返回空 text（`""`）且没有 tool_calls
+    2. `text = ""`, `tool_calls = []`
+    3. 在 [_to_assistant_message](src/miniagent/agent.py#L63-L70) 中：
+       - `if text:` 为 False，不添加 text block
+       - `tool_calls` 为空，不添加 tool_use block
+       - 结果 `content = []`（空列表）
+    4. 返回 `{"role": "assistant", "content": []}`
+    5. Anthropic API 报错："all messages must have non-empty content"
+  - **关键代码问题**：`_to_assistant_message` 函数没有处理 text 和 tool_calls 都为空的情况
+- **修复方案**（Phase 4: Implementation）：
+  - **核心思路**：确保 assistant 消息的 content 永远不为空
+  - **具体改动**：在 [_to_assistant_message](src/miniagent/agent.py#L70) 中添加检查，如果 content 为空则添加默认的空文本块
+  - **文件改动**：[agent.py:70-72](src/miniagent/agent.py#L70-L72)（添加 content 为空检查）
+- **测试验证**：
+  - 新增测试：`test_run_handles_empty_text_response`
+  - 验证：LLM 返回空 text 且无 tool_calls 时，assistant 消息 content 非空
+  - 57 tests passed（新增 1 个测试）
+- **subagent 输出摘要**：主 agent 直接执行调试和修复。
+- **人工干预**：无。
+- **最终验证**：57 tests passed · ruff 0 error · mypy 0 error
+- **学到的教训**：
+  - **Anthropic API 的消息格式要求**——所有消息必须有非空 content。这是 API 协议层面的硬约束，不能违反。
+  - **防御性编程的重要性**——即使 LLM 返回异常响应（空 text、无 tool_calls），代码也要能优雅处理，而不是让 API 报错。
+  - **系统化调试流程有效**——按照 Phase 1→2→3→4 的流程，快速定位并修复问题。这次的问题比 #26 更简单，但同样需要遵循调试流程。
 
