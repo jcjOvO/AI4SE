@@ -37,7 +37,7 @@ class _LLM:
     async def stream_step(self, messages, tools):
         last = messages[-1]
         content = last.get("content", "") if isinstance(last.get("content"), str) else "hi"
-        return "Echo: " + content, []
+        return "Echo: " + content, [], None
 
 
 @dataclass

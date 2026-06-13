@@ -46,7 +46,7 @@ Event = AssistantDelta | ToolCallStart | ToolCallResult | EndTurn | AgentError
 class LLMProtocol(Protocol):
     async def stream_step(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> tuple[str, list[Any]]: ...
+    ) -> tuple[str, list[Any], Any]: ...
 
 
 class ToolsProtocol(Protocol):
@@ -98,7 +98,7 @@ async def run(
     """
     try:
         while True:
-            text, tool_calls = await llm.stream_step(messages, tools.all_schemas())
+            text, tool_calls, _usage = await llm.stream_step(messages, tools.all_schemas())
             on_event(AssistantDelta(text=text))
 
             assistant_msg = _to_assistant_message(text, tool_calls)

@@ -6,7 +6,7 @@ import httpx
 import pytest
 import respx
 
-from miniagent.llm import LLMClient
+from miniagent.llm import LLMClient, StepUsage
 
 
 @pytest.fixture
@@ -68,6 +68,7 @@ async def test_stream_step_returns_text_and_tool_calls(llm: LLMClient) -> None:
         {
             "type": "message_delta",
             "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 42},
         },
         {"type": "message_stop"},
     ]
@@ -83,7 +84,7 @@ async def test_stream_step_returns_text_and_tool_calls(llm: LLMClient) -> None:
 
     respx.post("https://api.example.com/v1/messages").mock(side_effect=sse_response)
 
-    text, tool_calls = await llm.stream_step(
+    text, tool_calls, usage = await llm.stream_step(
         messages=[{"role": "user", "content": "hi"}],
         tools=[],
     )
@@ -92,6 +93,10 @@ async def test_stream_step_returns_text_and_tool_calls(llm: LLMClient) -> None:
     assert tool_calls[0].name == "read_file"
     assert tool_calls[0].input == {"path": "foo.py"}
     assert tool_calls[0].id == "toolu_1"
+    # usage assertions
+    assert isinstance(usage, StepUsage)
+    assert usage.input_tokens == 5  # from message_start
+    assert usage.output_tokens > 0  # from message_delta
 
 
 @respx.mock
@@ -101,7 +106,7 @@ async def test_stream_step_passes_messages_and_model(llm: LLMClient) -> None:
             200, text=_empty_sse(), headers={"content-type": "text/event-stream"}
         )
     )
-    await llm.stream_step(messages=[{"role": "user", "content": "x"}], tools=[])
+    text, _, _ = await llm.stream_step(messages=[{"role": "user", "content": "x"}], tools=[])
     assert route.called
     body = route.calls.last.request.content.decode()
     payload = json.loads(body)
@@ -141,7 +146,7 @@ async def test_retries_on_429_then_succeeds(llm: LLMClient) -> None:
             httpx.Response(200, text=_empty_sse(), headers={"content-type": "text/event-stream"}),
         ]
     )
-    text, _ = await llm.stream_step(messages=[{"role": "user", "content": "x"}], tools=[])
+    text, _, _ = await llm.stream_step(messages=[{"role": "user", "content": "x"}], tools=[])
     assert text == ""
     assert route.call_count == 3
 
@@ -168,3 +173,27 @@ async def test_retry_exhausted_after_4_attempts(llm: LLMClient) -> None:
 
     with pytest.raises(RetryExhaustedError):
         await llm.stream_step(messages=[{"role": "user", "content": "x"}], tools=[])
+
+
+@respx.mock
+async def test_stream_step_usage_defaults_to_zero_when_missing(llm: LLMClient) -> None:
+    """API 未返回 usage 字段时，默认 StepUsage(0, 0)。"""
+    events = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "m",
+                "role": "assistant",
+                "content": [],
+                "stop_reason": "end_turn",
+            },
+        },
+        {"type": "message_stop"},
+    ]
+    body = "\n".join(f"event: {e['type']}\ndata: {json.dumps(e)}" for e in events)
+    respx.post("https://api.example.com/v1/messages").mock(
+        return_value=httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+    )
+    _, _, usage = await llm.stream_step(messages=[{"role": "user", "content": "x"}], tools=[])
+    assert usage.input_tokens == 0
+    assert usage.output_tokens == 0

@@ -30,6 +30,12 @@ class ToolCall:
     input: dict[str, Any]
 
 
+@dataclass
+class StepUsage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
 _RETRIABLE_STATUS = {408, 409, 429, 500, 502, 503, 504, 529}
 _MAX_RETRIES = 3
 # Exponential-backoff base, in seconds. Production should use 1.0s so the
@@ -63,7 +69,7 @@ class LLMClient:
 
     async def stream_step(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> tuple[str, list[ToolCall]]:
+    ) -> tuple[str, list[ToolCall], StepUsage]:
         """One assistant turn with retry on transient errors."""
         last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
@@ -79,7 +85,7 @@ class LLMClient:
 
     async def _stream_step_once(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> tuple[str, list[ToolCall]]:
+    ) -> tuple[str, list[ToolCall], StepUsage]:
         body: dict[str, Any] = {
             "model": self.model,
             "max_tokens": 8192,
@@ -113,6 +119,7 @@ class LLMClient:
             text_parts: list[str] = []
             tool_calls: list[ToolCall] = []
             current_block: dict[str, Any] | None = None
+            usage = StepUsage()
 
             async for line in resp.aiter_lines():
                 if not line or not line.startswith("data: "):
@@ -120,7 +127,15 @@ class LLMClient:
                 payload = json.loads(line[len("data: ") :])
                 etype = payload.get("type")
 
-                if etype == "content_block_start":
+                if etype == "message_start":
+                    msg_usage = payload.get("message", {}).get("usage", {})
+                    usage.input_tokens = msg_usage.get("input_tokens", 0)
+
+                elif etype == "message_delta":
+                    delta_usage = payload.get("usage", {})
+                    usage.output_tokens = delta_usage.get("output_tokens", 0)
+
+                elif etype == "content_block_start":
                     current_block = payload["content_block"]
                     if current_block["type"] == "text":
                         current_block.setdefault("text", "")
@@ -158,7 +173,7 @@ class LLMClient:
                         )
                     current_block = None
 
-            return "".join(text_parts), tool_calls
+            return "".join(text_parts), tool_calls, usage
         finally:
             if not resp.is_closed:
                 await resp.aclose()

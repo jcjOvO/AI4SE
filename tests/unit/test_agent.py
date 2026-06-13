@@ -29,11 +29,11 @@ class FakeToolCall:
 class FakeLLM:
     """Mimics LLMClient.stream_step; user scripts a queue of responses."""
 
-    responses: list[tuple[str, list[FakeToolCall]]]
+    responses: list[tuple[str, list[FakeToolCall], None]]
 
     async def stream_step(
         self, messages: list[dict], tools: list[dict]
-    ) -> tuple[str, list[FakeToolCall]]:
+    ) -> tuple[str, list[FakeToolCall], None]:
         return self.responses.pop(0)
 
 
@@ -54,7 +54,7 @@ class FakeTools:
 
 
 async def test_run_emits_assistant_delta_and_end_turn_on_text_only_response() -> None:
-    llm = FakeLLM(responses=[("Hi there!", [])])
+    llm = FakeLLM(responses=[("Hi there!", [], None)])
     tools = FakeTools(by_name={})
     events: list[Event] = []
 
@@ -82,8 +82,12 @@ async def test_run_executes_tool_and_reflows_result() -> None:
 
     llm = FakeLLM(
         responses=[
-            ("Let me read it.", [FakeToolCall(id="c1", name="read_file", input={"path": "foo"})]),
-            ("Done.", []),
+            (
+                "Let me read it.",
+                [FakeToolCall(id="c1", name="read_file", input={"path": "foo"})],
+                None,
+            ),
+            ("Done.", [], None),
         ]
     )
     events: list[Event] = []
@@ -116,8 +120,8 @@ async def test_run_reflows_tool_error_back_to_llm() -> None:
 
     llm = FakeLLM(
         responses=[
-            ("Reading.", [FakeToolCall(id="c1", name="read_file", input={"path": "foo"})]),
-            ("Sorry, file missing.", []),
+            ("Reading.", [FakeToolCall(id="c1", name="read_file", input={"path": "foo"})], None),
+            ("Sorry, file missing.", [], None),
         ]
     )
     events: list[Event] = []
@@ -142,7 +146,7 @@ async def test_run_propagates_cancellation() -> None:
     class HangingLLM:
         async def stream_step(self, messages, tools):
             await asyncio.sleep(10)  # never returns
-            return "", []  # pragma: no cover
+            return "", [], None  # pragma: no cover
 
     events: list[Event] = []
     msgs = [{"role": "user", "content": "hi"}]
