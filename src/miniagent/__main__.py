@@ -43,8 +43,12 @@ def main(argv: list[str] | None = None) -> int:
         cli_overrides=cli_overrides if cli_overrides else None,
     )
 
-    # Default workspace: $MINI_AGENT_WORKSPACE or cwd
-    ws = Path(os.environ.get("MINI_AGENT_WORKSPACE", Path.cwd()))
+    # Default workspace: $MINI_AGENT_WORKSPACE or <cwd>/workspace
+    # In Docker the env var is typically set to /workspace; locally we
+    # auto-create a workspace/ subdirectory so the sandbox behaviour is
+    # consistent between the two environments.
+    ws = Path(os.environ.get("MINI_AGENT_WORKSPACE", str(Path.cwd() / "workspace")))
+    ws.mkdir(parents=True, exist_ok=True)
     os.environ["MINI_AGENT_WORKSPACE"] = str(ws)
 
     # Sessions dir

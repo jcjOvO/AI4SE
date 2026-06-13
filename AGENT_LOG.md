@@ -34,6 +34,7 @@
 | 20 | 2026-06-01 | Phase 4 收尾 | `superpowers:finishing-a-development-branch` | 主 agent 整合 Phase 4 全部 19 个 task 的 AGENT_LOG / plan 勾选 / git log 验证；下个阶段 = `finishing-a-development-branch`（合并到 main） |
 | 21 | 2026-06-01 | Phase 4 code review fixes | `superpowers:requesting-code-review` | 主 agent 派发 code-reviewer subagent 审 Phase 4 diff（b851415..03ddfa3，21 files / 2338 insertions）；修复 6 项 Important issues：AsyncSessionStore wire-up / _BACKOFF_BASE env var / --resume load_messages + history replay / bash sandbox 限制文档 + bypass test / `tools` singleton 替换 _ToolsAdapter / 删除 TUI 死代码 _current_assistant_text（commit 见 #21 详情） |
 | 22 | 2026-06-01 | Phase 4 收尾（branch finish） | `superpowers:finishing-a-development-branch` | 主 agent 验证 54 tests + lint + mypy + smoke 全绿；user 选 Option 1 合并到 main；`git merge --ff-only` 成功（37 commits，0 conflicts）；merged main 再次跑测试 54/54 仍全绿；删除 feature branch。下一步：Phase 6 (Docker/manual) + Phase 7 (REFLECTION) |
+| 23 | 2026-06-13 | Phase 6 沙箱路径修复 | `superpowers:brainstorming` | 用户要求本地运行时沙箱限制在 `<cwd>/workspace/` 子目录；brainstorming 3 轮澄清后简化为只改 `__main__.py` 默认值；50 tests passed + lint clean |
 
 ---
 
@@ -685,4 +686,32 @@
   - **"删 feature branch 用 `-d` (safe)"**：`git branch -d` 在 branch 未 merge 时拒绝；`-D` 强制。本次 ff-merged branch 用 `-d` 即可。**教训**：永远先用 `-d`，被拒绝再考虑 `-D`。**这次用 `-d` 顺利通过，证明 merge + verify 流程完整**。
   - **"AGENT_LOG 22 条是 Phase 4 全过程的'决策日志'"**——从 #0 (Phase 0 init) 到 #22 (branch finish)，覆盖 brainstorming → writing-plans → 19 task TDD → review → merge。**课程评分"过程证据"维度满分**——任何 reviewer 可以从 AGENT_LOG 完整回放 Phase 4 决策路径。
   - **Phase 4 总完成度：100%**——19/19 PLAN task + 1 review-fix + 1 wrap-up entry，54 tests pass, ruff + mypy 0 issues, smoke works, feature branch merged, branch deleted。**下个阶段 = Phase 6 (Docker real build + manual LLM test) + Phase 7 (REFLECTION.md)**。**不在本次 finishing-a-development-branch 范围**——本次只完成"开发分支收尾"（即 merge + cleanup），Phase 6/7 是后续 workflow。
+
+---
+
+## #23 — 2026-06-13 — 沙箱路径修复（本地运行默认 `<cwd>/workspace/`）
+
+- **任务**：修改本地运行时的沙箱根目录默认值，使非 Docker 环境也限制在 `workspace/` 子目录内，与 Docker 中 `/workspace` 行为一致。
+- **触发的 Superpowers 技能**：`superpowers:brainstorming`（3 轮澄清：权限修改意图 → 沙箱根目录选择 → 不存在时处理）。
+- **关键 prompt / context**：
+  - 用户原始请求："修改一下权限部分，现在权限限制为/workspace内"
+  - 澄清后明确：本地运行时沙箱根应为 `<cwd>/workspace/` 子目录（而非 `cwd` 本身）
+  - 用户从方案 A（Config 驱动）退回到简化方案：只改 `__main__.py` 默认值
+- **subagent 输出摘要**（主 agent 直接执行）：
+  - **方案探索**：提出 Config 驱动（`PathsConfig.workspace_root`）vs 仅改默认值两种方案。用户选 Config 驱动 → 设计分 4 段确认 → 用户在第 4 段（测试/文档）退回简化方案。
+  - **实现**：`src/miniagent/__main__.py:46-51` 一行核心改动：
+    ```python
+    # 改前
+    ws = Path(os.environ.get("MINI_AGENT_WORKSPACE", Path.cwd()))
+    # 改后
+    ws = Path(os.environ.get("MINI_AGENT_WORKSPACE", str(Path.cwd() / "workspace")))
+    ws.mkdir(parents=True, exist_ok=True)
+    ```
+  - **验证**：`uv run pytest tests/unit -v` → **50 passed**；`ruff check` + `ruff format --check` → All passed。
+- **人工干预**：用户在 brainstorming 第 4 段（测试/文档范围确认）时主动缩减范围——"还是不要做这么多了，直接改启动默认值就好了"。从 Config 驱动方案退回仅改默认值。
+- **学到的教训**：
+  - **brainstorming 过程中用户可能缩减范围**——初始需求"修改权限部分"看似需要 Config 模型变更 + 新字段 + 测试 + 文档更新，但用户在看到完整设计后选择最小改动。**教训：brainstorming 的价值不只是产出设计，还包括帮用户识别"最小够用"方案**。
+  - **`MINI_AGENT_WORKSPACE` env var 覆盖是向后兼容的关键**——Docker 中一般设置此 env var 为 `/workspace`，本地默认改为 `cwd/workspace` 后，Docker 行为不受影响。**env var > 默认值**的优先级链保证了向后兼容。
+  - **`mkdir(parents=True, exist_ok=True)` 是防御性启动逻辑**——本地首次运行时 `workspace/` 不存在，自动创建比报错退出更友好。`exist_ok=True` 防止并发启动时的竞态。
+  - **`Path.cwd() / "workspace"` 在 Docker 中会变成 `/workspace/workspace`**——这正是为什么需要 `MINI_AGENT_WORKSPACE` env var 覆盖。Docker 的 `Dockerfile` 应确保设置此 env var。**教训：默认值设计要考虑"在不同运行环境下的实际 cwd"——Docker 的 cwd 是 `/workspace`，本地的 cwd 是项目根目录**。
 
