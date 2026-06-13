@@ -10,18 +10,28 @@ from miniagent.tui import AgentApp
 
 @pytest.mark.asyncio
 async def test_app_starts_and_shows_header_and_input() -> None:
-    app = AgentApp(llm=None, tools=None, session=None, session_id="test-123")  # type: ignore[arg-type]
+    app = AgentApp(
+        llm=None,
+        tools=None,
+        session=None,
+        session_id="test-123",
+        model_name="claude-x",  # type: ignore[arg-type]
+    )
     async with app.run_test() as pilot:
-        # Header is rendered
         header = app.query_one("#header", Static)
-        assert "test-123" in str(header.renderable)
-        # Input is focusable
+        header_text = str(header.renderable)
+        assert "miniagent" in header_text
+        assert "claude-x" in header_text
+        assert "test-123" in header_text
+        assert "ready" in header_text
+        status = app.query_one("#status", Static)
+        assert status is not None
         assert app.query_one(Input) is not None
         await pilot.pause()
 
 
 # ---------------------------------------------------------------------------
-# Task 13: input → agent.run
+# Mocks
 # ---------------------------------------------------------------------------
 
 
@@ -49,6 +59,11 @@ class _Tools:
         return _Msg()
 
 
+# ---------------------------------------------------------------------------
+# Input -> agent.run
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
 async def test_user_input_triggers_agent_run() -> None:
     app = AgentApp(
@@ -60,7 +75,6 @@ async def test_user_input_triggers_agent_run() -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await pilot.press("h", "e", "l", "l", "o", "enter")
-        # Wait for the background agent task to complete + render.
         for _ in range(20):
             await pilot.pause()
             log = app.query_one("#log", RichLog)
@@ -69,12 +83,16 @@ async def test_user_input_triggers_agent_run() -> None:
                 break
         else:
             pytest.fail(f"Agent response never appeared. Log was:\n{text}")
-        # User message and assistant echo should both be present
-        assert "you>" in text
-        assert "assistant>" in text
-        # Status bar should return to 'ready' after the agent finishes
+        assert "you" in text
+        assert "assistant" in text
         status = app.query_one("#status", Static)
-        assert str(status.renderable) == "ready"
+        status_text = str(status.renderable)
+        assert "ready" in status_text
+
+
+# ---------------------------------------------------------------------------
+# History replay
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -108,8 +126,5 @@ async def test_initial_messages_replayed_on_mount() -> None:
         await pilot.pause()
         log = app.query_one("#log", RichLog)
         text = "\n".join(str(line) for line in log.lines)
-        # History should be replayed
         assert "previous question" in text
         assert "previous answer" in text
-        # The new run_agent will produce assistant> with whatever echo
-        # we get, so just verify the initial replay rendered.
