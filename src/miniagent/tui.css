@@ -1,0 +1,51 @@
+/* Catppuccin Mocha inspired dark theme for miniagent TUI */
+
+AgentApp {
+    background: #1e1e2e;
+    color: #cdd6f4;
+}
+
+/* ── Header ─────────────────────────────────────────── */
+
+#header {
+    dock: top;
+    height: 1;
+    background: #313244;
+    color: #a6adc8;
+    padding: 0 1;
+}
+
+/* ── Chat Log ───────────────────────────────────────── */
+
+#log {
+    height: 1fr;
+    border: solid #585b70;
+    background: #1e1e2e;
+    scrollbar-color: #585b70;
+    scrollbar-color-hover: #6c7086;
+    scrollbar-color-active: #7f849c;
+}
+
+/* ── Status Bar ─────────────────────────────────────── */
+
+#status {
+    dock: bottom;
+    height: 1;
+    background: #313244;
+    color: #a6adc8;
+    padding: 0 1;
+}
+
+/* ── Input ──────────────────────────────────────────── */
+
+#input {
+    dock: bottom;
+    background: #313244;
+    color: #cdd6f4;
+    border: solid #585b70;
+    padding: 0 1;
+}
+
+#input:focus {
+    border: solid #89dceb;
+}
