@@ -32,6 +32,8 @@ class ToolCallResult:
 @dataclass
 class EndTurn:
     final_text: str
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass
@@ -98,7 +100,7 @@ async def run(
     """
     try:
         while True:
-            text, tool_calls, _usage = await llm.stream_step(messages, tools.all_schemas())
+            text, tool_calls, usage = await llm.stream_step(messages, tools.all_schemas())
             on_event(AssistantDelta(text=text))
 
             assistant_msg = _to_assistant_message(text, tool_calls)
@@ -107,7 +109,15 @@ async def run(
                 session.append_message(session_id, assistant_msg)
 
             if not tool_calls:
-                on_event(EndTurn(final_text=text))
+                input_tokens = getattr(usage, "input_tokens", 0) if usage else 0
+                output_tokens = getattr(usage, "output_tokens", 0) if usage else 0
+                on_event(
+                    EndTurn(
+                        final_text=text,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                    )
+                )
                 return messages
 
             for call in tool_calls:

@@ -71,6 +71,30 @@ async def test_run_emits_assistant_delta_and_end_turn_on_text_only_response() ->
     assert events[0].text == "Hi there!"
     assert isinstance(events[1], EndTurn)
     assert events[1].final_text == "Hi there!"
+    assert events[1].input_tokens == 0  # FakeLLM returns None for usage
+    assert events[1].output_tokens == 0
+
+
+async def test_run_end_turn_carries_usage_from_llm() -> None:
+    """When LLM returns StepUsage, EndTurn should carry the token counts."""
+    from miniagent.llm import StepUsage
+
+    @dataclass
+    class UsageLLM:
+        async def stream_step(self, messages, tools):
+            return "Hi!", [], StepUsage(input_tokens=10, output_tokens=25)
+
+    events: list[Event] = []
+    await run(
+        messages=[{"role": "user", "content": "hi"}],
+        llm=UsageLLM(),  # type: ignore[arg-type]
+        tools=FakeTools(by_name={}),
+        on_event=events.append,
+    )
+    end = events[-1]
+    assert isinstance(end, EndTurn)
+    assert end.input_tokens == 10
+    assert end.output_tokens == 25
 
 
 async def test_run_executes_tool_and_reflows_result() -> None:
