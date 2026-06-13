@@ -163,6 +163,76 @@ async def test_run_reflows_tool_error_back_to_llm() -> None:
     assert "FileNotFound" in tool_result_event.error
 
 
+async def test_run_maintains_message_consistency_on_tool_exception() -> None:
+    """When a tool raises an exception, messages should still have matching pairs.
+
+    This is the fix for the bug where tool_use without tool_result caused
+    API errors.
+    """
+
+    async def failing_tool(args: dict[str, Any]) -> ToolResult:
+        raise RuntimeError("Tool execution failed!")
+
+    tool = Tool(
+        name="failing_tool",
+        description="fails",
+        input_schema={},
+        handler=failing_tool,
+    )
+    tools = FakeTools(by_name={"failing_tool": tool})
+
+    llm = FakeLLM(
+        responses=[
+            (
+                "Let me try.",
+                [FakeToolCall(id="c1", name="failing_tool", input={})],
+                None,
+            ),
+            ("Tool failed.", [], None),
+        ]
+    )
+    events: list[Event] = []
+
+    msgs = await run(
+        messages=[{"role": "user", "content": "do something"}],
+        llm=llm,  # type: ignore[arg-type]
+        tools=tools,  # type: ignore[arg-type]
+        on_event=events.append,
+    )
+
+    # Verify message structure: each tool_use must have a matching tool_result
+    for i, msg in enumerate(msgs):
+        if msg.get("role") == "assistant":
+            content = msg.get("content", [])
+            if isinstance(content, list):
+                tool_use_blocks = [
+                    b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"
+                ]
+                if tool_use_blocks:
+                    # Next message should be user with tool_result
+                    assert i + 1 < len(msgs), f"tool_use at index {i} has no following message"
+                    next_msg = msgs[i + 1]
+                    assert next_msg.get("role") == "user", (
+                        f"Expected user message after tool_use at {i}"
+                    )
+                    next_content = next_msg.get("content", [])
+                    if isinstance(next_content, list):
+                        tool_result_ids = {
+                            b.get("tool_use_id")
+                            for b in next_content
+                            if isinstance(b, dict) and b.get("type") == "tool_result"
+                        }
+                        for block in tool_use_blocks:
+                            assert block.get("id") in tool_result_ids, (
+                                f"tool_use id={block.get('id')} missing from tool_result ids"
+                            )
+
+    # Verify error was reported
+    error_events = [e for e in events if isinstance(e, ToolCallResult) and not e.ok]
+    assert len(error_events) == 1
+    assert "RuntimeError" in error_events[0].error
+
+
 async def test_run_propagates_cancellation() -> None:
     """Ctrl+C cancels the LLM call; run() re-raises CancelledError; partial messages preserved."""
 

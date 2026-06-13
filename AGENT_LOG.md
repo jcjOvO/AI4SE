@@ -37,6 +37,7 @@
 | 23 | 2026-06-13 | Phase 6 沙箱路径修复 | `superpowers:brainstorming` | 用户要求本地运行时沙箱限制在 `<cwd>/workspace/` 子目录；brainstorming 3 轮澄清后简化为只改 `__main__.py` 默认值；50 tests passed + lint clean |
 | 24 | 2026-06-13 | Phase 6 多轮对话修复 | — | `_run_agent` 每次重建 messages 导致 LLM 失忆；改为 `_messages` 持续累积 + 用户消息持久化到 session；53 tests passed |
 | 25 | 2026-06-13 | Phase 6 TUI 美化 | `superpowers:brainstorming` + `superpowers:writing-plans` + `superpowers:subagent-driven-development` | 全面美化 TUI：Catppuccin Mocha 暗色主题 + 面板式消息 + token 用量显示 + spinner 状态栏；6 tasks，subagent-driven；55 tests passed |
+| 26 | 2026-06-13 | Phase 6 Bug 修复 | `superpowers:systematic-debugging` | 修复 tool_use 缺少 tool_result 导致 API 报错的问题；根因：工具执行异常时 assistant 消息已添加但 tool_result 未添加；修复：延迟添加 assistant 消息直到所有工具结果收集完毕；57 tests passed |
 
 ---
 
@@ -766,4 +767,43 @@
   - **Spec review 的"误读"需要主 agent 判断**——reviewer 错误地认为 token 用量应在 status bar（实际 spec §4.1 明确写在 header）。主 agent 需要对照 spec 原文判断 reviewer 发现是否成立。**教训：reviewer 不是 infallible，主 agent 必须验证每个 finding 对照 spec**。
   - **CancelledError re-raise 是项目级硬约束**——code reviewer 发现 `_run_agent` 吞了 CancelledError，违反 CLAUDE.md convention #10。**教训：每次重写 async 方法都要检查 CancelledError 处理**。
   - **Test mock 的类型注解不能偷懒**——`_LLM` 和 `_Tools` 用 `@dataclass` 但缺少类型注解，mypy strict 会报 9 个错。**教训：测试 mock 也要写完整类型注解，不能因为"只是测试"就偷懒**。
+
+---
+
+## #26 — 2026-06-13 — Phase 6：修复 tool_use 缺少 tool_result 导致 API 报错
+
+- **任务**：修复 Anthropic API 报错 "tool_use" 没有对应的 "tool_result" 的问题。
+- **触发的 Superpowers 技能**：`superpowers:systematic-debugging`（4 阶段系统化调试流程）。
+- **关键 prompt / context**：
+  - 用户原始问题："出现了'tool_use' 没有 'tool_result'的问题"
+  - 这是 Anthropic Messages API 的格式要求：如果 assistant 消息包含 tool_use，紧接着的 user 消息必须包含对应的 tool_result
+- **根因分析**（Phase 1: Root Cause Investigation）：
+  - **问题场景**：
+    1. LLM 返回包含 `tool_use` 的 assistant 消息
+    2. 代码将 assistant 消息**立即添加**到 `messages` 列表（[agent.py:106-109](src/miniagent/agent.py#L106-L109)）
+    3. 在执行工具的过程中发生异常（超时、网络错误、工具执行失败等）
+    4. `tool_result` 没有被添加到 `messages`（异常中断了循环）
+    5. 用户再次输入时，`messages` 列表中包含不完整的 tool_use/tool_result 对
+    6. Anthropic API 报错："tool_use" 没有 "tool_result"
+  - **关键代码问题**：assistant 消息在工具执行**之前**就被添加，而不是在所有 tool_result 收集完毕**之后**
+- **修复方案**（Phase 4: Implementation）：
+  - **核心思路**：延迟添加 assistant 消息，直到所有工具执行完成并收集结果
+  - **具体改动**：
+    1. 如果没有 tool_calls，直接添加 assistant 消息并返回
+    2. 如果有 tool_calls，先执行所有工具并收集结果
+    3. 如果工具执行抛出异常，创建 ErrorResult 保持消息一致性
+    4. 最后一次性添加 assistant 消息和所有 tool_result
+  - **文件改动**：[agent.py:89-175](src/miniagent/agent.py#L89-L175)（run 函数重构）
+- **测试验证**：
+  - 新增测试：`test_run_maintains_message_consistency_on_tool_exception`
+  - 验证：即使工具执行抛出异常，messages 列表中每个 tool_use 都有对应的 tool_result
+  - 57 tests passed（新增 1 个测试）
+- **subagent 输出摘要**：主 agent 直接执行调试和修复。
+- **人工干预**：无。
+- **最终验证**：57 tests passed · ruff 0 error · mypy 0 error
+- **学到的教训**：
+  - **消息一致性是 Anthropic API 的硬约束**——如果 assistant 消息包含 tool_use，必须有对应的 tool_result。这是 API 协议层面的要求，不是可选的。
+  - **"先添加再执行"是错误的模式**——应该"先执行再添加"，确保所有依赖数据都准备好后再修改共享状态。这个模式适用于任何"原子性操作"场景。
+  - **异常处理要考虑消息完整性**——即使工具执行失败，也要创建一个 ErrorResult 来保持消息格式的完整性。这是"优雅降级"的一部分。
+  - **系统化调试比随机修复更高效**——按照 Phase 1（根因分析）→ Phase 2（模式分析）→ Phase 3（假设验证）→ Phase 4（实现修复）的流程，15 分钟就定位并修复了问题。
 

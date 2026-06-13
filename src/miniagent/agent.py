@@ -103,12 +103,13 @@ async def run(
             text, tool_calls, usage = await llm.stream_step(messages, tools.all_schemas())
             on_event(AssistantDelta(text=text))
 
-            assistant_msg = _to_assistant_message(text, tool_calls)
-            messages.append(assistant_msg)
-            if session and session_id:
-                session.append_message(session_id, assistant_msg)
-
+            # If there are no tool calls, add the assistant message and return
             if not tool_calls:
+                assistant_msg = _to_assistant_message(text, tool_calls)
+                messages.append(assistant_msg)
+                if session and session_id:
+                    session.append_message(session_id, assistant_msg)
+
                 input_tokens = getattr(usage, "input_tokens", 0) if usage else 0
                 output_tokens = getattr(usage, "output_tokens", 0) if usage else 0
                 on_event(
@@ -120,18 +121,51 @@ async def run(
                 )
                 return messages
 
+            # Execute all tool calls first, collecting results
+            tool_results: list[tuple[Any, Any]] = []  # (call, result)
             for call in tool_calls:
                 on_event(ToolCallStart(call_id=call.id, name=call.name, args=call.input))
-                result = await tools.execute(call.name, call.input)
-                on_event(
-                    ToolCallResult(
-                        call_id=call.id,
-                        name=call.name,
-                        ok=not result.is_error,
-                        output=result.output,
-                        error=result.error,
+                try:
+                    result = await tools.execute(call.name, call.input)
+                    on_event(
+                        ToolCallResult(
+                            call_id=call.id,
+                            name=call.name,
+                            ok=not result.is_error,
+                            output=result.output,
+                            error=result.error,
+                        )
                     )
-                )
+                    tool_results.append((call, result))
+                except Exception as e:
+                    # If tool execution fails, create an error result
+                    on_event(
+                        ToolCallResult(
+                            call_id=call.id,
+                            name=call.name,
+                            ok=False,
+                            output="",
+                            error=f"{type(e).__name__}: {e}",
+                        )
+                    )
+
+                    # Create a mock error result to maintain message consistency
+                    class ErrorResult:
+                        def __init__(self, error_msg: str) -> None:
+                            self.output = ""
+                            self.error = error_msg
+                            self.is_error = True
+
+                    tool_results.append((call, ErrorResult(f"{type(e).__name__}: {e}")))
+
+            # Now add assistant message and all tool results atomically
+            # This ensures messages list always has matching tool_use/tool_result pairs
+            assistant_msg = _to_assistant_message(text, tool_calls)
+            messages.append(assistant_msg)
+            if session and session_id:
+                session.append_message(session_id, assistant_msg)
+
+            for call, result in tool_results:
                 tool_msg = _to_tool_result_message(call.id, result)
                 messages.append(tool_msg)
                 if session and session_id:
