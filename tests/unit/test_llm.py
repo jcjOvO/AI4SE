@@ -96,7 +96,7 @@ async def test_stream_step_returns_text_and_tool_calls(llm: LLMClient) -> None:
     # usage assertions
     assert isinstance(usage, StepUsage)
     assert usage.input_tokens == 5  # from message_start
-    assert usage.output_tokens > 0  # from message_delta
+    assert usage.output_tokens == 42  # from message_delta
 
 
 @respx.mock
