@@ -80,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         api_key=config.llm.api_key,
         base_url=config.llm.base_url,
         model=config.llm.model,
+        config=config.agent,
     )
 
     # AsyncSessionStore wraps the sync store so the agent loop never
