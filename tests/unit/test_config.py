@@ -50,3 +50,17 @@ def test_cli_override_wins(tmp_path: Path) -> None:
     )
     assert cfg.llm.api_key == "k1"
     assert cfg.llm.model == "m2"
+
+
+def test_agent_config_system_prompt_default() -> None:
+    from miniagent.config import AgentConfig
+
+    cfg = AgentConfig()
+    assert cfg.system_prompt == ""
+
+
+def test_agent_config_system_prompt_custom() -> None:
+    from miniagent.config import AgentConfig
+
+    cfg = AgentConfig(system_prompt="Be helpful")
+    assert cfg.system_prompt == "Be helpful"

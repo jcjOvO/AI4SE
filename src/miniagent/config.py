@@ -27,7 +27,7 @@ class PathsConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    pass
+    system_prompt: str = ""
 
 
 class Config(BaseModel):
