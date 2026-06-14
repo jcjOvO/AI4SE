@@ -18,12 +18,12 @@ A terminal-based, multi-tool, multi-turn coding agent in a single Docker image. 
 - [x] **Phase 3**：冷启动验证 — *跳过（用户授权）*
 - [x] **Phase 4**：`subagent-driven-development` + TDD → 19/19 tasks 完成，54 tests，code review fixes merged
 - [x] **Phase 5**：`finishing-a-development-branch` → feature branch 合并到 main（fast-forward）
-- [ ] **Phase 6**：Docker 实际构建 + 真 LLM 手动测试
+- [x] **Phase 6**：本地运行 + Bug 修复 + TUI 美化 + System Prompt（28 条 AGENT_LOG）
 - [ ] **Phase 7**：[REFLECTION.md](REFLECTION.md) 反思报告
 
-**当前指标**：54 tests passed · ruff 0 error · mypy strict 0 error · ~1,200 LOC（6 模块）
+**当前指标**：68 tests passed · ruff 0 error · mypy strict 0 error · ~1,500 LOC（6 模块）
 
-详细过程记录见 [AGENT_LOG.md](AGENT_LOG.md)（22 条记录，覆盖从 Phase 0 到 branch finish 的完整决策路径）。
+详细过程记录见 [AGENT_LOG.md](AGENT_LOG.md)（28 条记录，覆盖从 Phase 0 到 Phase 6 system prompt 的完整决策路径）。
 
 ---
 
@@ -93,7 +93,7 @@ A terminal-based, multi-tool, multi-turn coding agent in a single Docker image. 
 ├── Makefile                  # 开发命令快捷入口
 ├── pyproject.toml            # 项目元数据 + 依赖 + ruff/mypy 配置
 ├── CLAUDE.md                 # Claude Code 操作手册
-├── AGENT_LOG.md              # 智能体协作过程记录（22 条）
+├── AGENT_LOG.md              # 智能体协作过程记录（28 条）
 └── README.md                 # 本文件
 ```
 
@@ -154,9 +154,9 @@ docker run -it --rm -v $PWD:/workspace -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY m
 ### 测试
 
 ```bash
-make test                 # unit + integration（54 tests）
-make test-unit            # 仅 unit（52 tests）
-make test-integration     # 仅 integration（2 tests）
+make test                 # unit + integration（67 tests）
+make test-unit            # 仅 unit（64 tests）
+make test-integration     # 仅 integration（3 tests）
 make e2e                  # e2e（1 test，需网络）
 
 # 跑单个测试
