@@ -46,8 +46,75 @@ _MAX_RETRIES = 3
 _BACKOFF_BASE = float(os.environ.get("MINI_AGENT_LLM_BACKOFF_BASE", "1.0"))
 
 
+def _build_system_prompt(config: Any = None) -> str:
+    """Build the system prompt with tool descriptions, safety rules, and response style."""
+    from miniagent.tools import tools
+
+    sections: list[str] = []
+
+    # 1. Identity + tool descriptions (dynamic from registry)
+    tool_lines: list[str] = []
+    for schema in tools.all_schemas():
+        name = schema.get("name", "unknown")
+        desc = schema.get("description", "No description.")
+        tool_lines.append(f"- {name}: {desc}")
+
+    sections.append(
+        "You are a coding assistant running in a Docker container.\n"
+        "Your working directory is /workspace. "
+        "All file operations should be relative to this directory.\n\n"
+        "You have the following tools available:\n\n" + "\n".join(tool_lines) + "\n\n"
+        "Use tools whenever the user asks you to perform file operations "
+        "or run commands.\n"
+        "Do NOT describe what you would do — "
+        "actually do it by calling the appropriate tool."
+    )
+
+    # 2. Safety rules
+    sections.append(
+        "## Safety Rules\n"
+        "- All file paths MUST resolve inside /workspace. "
+        "Do not access files outside this directory.\n"
+        "- Do NOT execute destructive commands "
+        "(rm -rf /, dd, mkfs, etc.).\n"
+        "- Do NOT modify system files or install packages "
+        "without explicit user request.\n"
+        "- If a requested operation violates these rules, "
+        "explain why and suggest alternatives."
+    )
+
+    # 3. Response style
+    sections.append(
+        "## Response Style\n"
+        "- Reply in Chinese (中文).\n"
+        "- Be concise and direct — avoid unnecessary preambles.\n"
+        "- When modifying code, explain WHY the change is needed, "
+        "not just WHAT changes.\n"
+        "- If there are multiple approaches, "
+        "list pros/cons and let the user choose."
+    )
+
+    result = "\n\n".join(sections)
+
+    # 4. User custom appendix (from config.toml [agent] system_prompt)
+    if config and getattr(config, "system_prompt", ""):
+        result += "\n\n---\n\n" + config.system_prompt
+
+    return result
+
+
 class _RetriableError(Exception):
     """Internal marker for errors that should trigger backoff + retry."""
+
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        response_body: str | None = None,
+    ):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_body = response_body
 
 
 class LLMClient:
@@ -72,16 +139,37 @@ class LLMClient:
     ) -> tuple[str, list[ToolCall], StepUsage]:
         """One assistant turn with retry on transient errors."""
         last_exc: Exception | None = None
+        attempts_detail: list[str] = []
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 return await self._stream_step_once(messages, tools)
+            except (AuthError, ContextOverflowError):
+                # Non-retriable: propagate immediately
+                raise
             except _RetriableError as e:
                 last_exc = e
-                if attempt < _MAX_RETRIES:
-                    await asyncio.sleep(_BACKOFF_BASE * (2**attempt))
-                    continue
-                break
-        raise RetryExhaustedError(f"Exhausted {_MAX_RETRIES + 1} attempts") from last_exc
+                attempt_info = f"Attempt {attempt + 1}: {e}"
+                if e.response_body:
+                    attempt_info += f" | Body: {e.response_body[:200]}"
+                attempts_detail.append(attempt_info)
+            except httpx.TimeoutException as e:
+                last_exc = e
+                attempts_detail.append(f"Attempt {attempt + 1}: Timeout - {type(e).__name__}: {e}")
+            except httpx.ConnectError as e:
+                last_exc = e
+                attempts_detail.append(f"Attempt {attempt + 1}: Connection error - {e}")
+            except Exception as e:
+                last_exc = e
+                err_type = type(e).__name__
+                attempts_detail.append(f"Attempt {attempt + 1}: Unexpected - {err_type}: {e}")
+            if attempt < _MAX_RETRIES:
+                await asyncio.sleep(_BACKOFF_BASE * (2**attempt))
+                continue
+            break
+        detail_str = "\n".join(attempts_detail)
+        raise RetryExhaustedError(
+            f"Exhausted {_MAX_RETRIES + 1} attempts.\n{detail_str}"
+        ) from last_exc
 
     async def _stream_step_once(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
@@ -104,8 +192,14 @@ class LLMClient:
                 await resp.aclose()
                 raise AuthError(f"Auth failed: {resp.status_code}")
             if resp.status_code in _RETRIABLE_STATUS:
+                body_bytes = await resp.aread()
                 await resp.aclose()
-                raise _RetriableError(f"Status {resp.status_code}")
+                body_text = body_bytes.decode("utf-8", errors="replace")[:500]
+                raise _RetriableError(
+                    f"Status {resp.status_code}",
+                    status_code=resp.status_code,
+                    response_body=body_text,
+                )
             if resp.status_code == 400:
                 # Check for context overflow
                 body_bytes = await resp.aread()
@@ -113,7 +207,11 @@ class LLMClient:
                 text = body_bytes.decode("utf-8", errors="replace")
                 if "context_length" in text or "too long" in text.lower():
                     raise ContextOverflowError(text)
-                raise _RetriableError(f"400: {text[:200]}")
+                raise _RetriableError(
+                    f"400: {text[:300]}",
+                    status_code=400,
+                    response_body=text[:500],
+                )
             resp.raise_for_status()
 
             text_parts: list[str] = []

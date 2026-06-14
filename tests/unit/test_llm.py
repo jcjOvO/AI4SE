@@ -197,3 +197,65 @@ async def test_stream_step_usage_defaults_to_zero_when_missing(llm: LLMClient) -
     _, _, usage = await llm.stream_step(messages=[{"role": "user", "content": "x"}], tools=[])
     assert usage.input_tokens == 0
     assert usage.output_tokens == 0
+
+
+# ---------------------------------------------------------------------------
+# System prompt tests
+# ---------------------------------------------------------------------------
+
+
+def test_build_system_prompt_contains_tool_names() -> None:
+    from miniagent.llm import _build_system_prompt
+
+    prompt = _build_system_prompt()
+    # Should mention all 4 built-in tools
+    assert "read_file" in prompt
+    assert "write_file" in prompt
+    assert "edit_file" in prompt
+    assert "bash" in prompt
+
+
+def test_build_system_prompt_contains_safety_rules() -> None:
+    from miniagent.llm import _build_system_prompt
+
+    prompt = _build_system_prompt()
+    assert "/workspace" in prompt
+    assert "Safety Rules" in prompt
+
+
+def test_build_system_prompt_contains_response_style() -> None:
+    from miniagent.llm import _build_system_prompt
+
+    prompt = _build_system_prompt()
+    assert "Response Style" in prompt
+    assert "Chinese" in prompt
+
+
+def test_build_system_prompt_appends_config_custom() -> None:
+    from miniagent.config import AgentConfig
+    from miniagent.llm import _build_system_prompt
+
+    cfg = AgentConfig(system_prompt="Custom instruction here")
+    prompt = _build_system_prompt(cfg)
+    assert "Custom instruction here" in prompt
+    assert "---" in prompt
+
+
+def test_build_system_prompt_no_separator_when_empty() -> None:
+    from miniagent.config import AgentConfig
+    from miniagent.llm import _build_system_prompt
+
+    cfg = AgentConfig(system_prompt="")
+    prompt = _build_system_prompt(cfg)
+    # The "---" separator should NOT appear when custom is empty
+    # Split by sections and check no standalone "---"
+    lines = prompt.split("\n")
+    assert "---" not in lines
+
+
+def test_build_system_prompt_default_when_no_config() -> None:
+    from miniagent.llm import _build_system_prompt
+
+    prompt = _build_system_prompt(None)
+    assert "coding assistant" in prompt
+    assert "read_file" in prompt
