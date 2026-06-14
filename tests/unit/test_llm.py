@@ -259,3 +259,52 @@ def test_build_system_prompt_default_when_no_config() -> None:
     prompt = _build_system_prompt(None)
     assert "coding assistant" in prompt
     assert "read_file" in prompt
+
+
+@respx.mock
+async def test_stream_step_sends_system_prompt() -> None:
+    """Verify that the API request body includes a system prompt."""
+    from miniagent.config import AgentConfig
+
+    cfg = AgentConfig(system_prompt="Custom instruction")
+    client = LLMClient(
+        api_key="sk-test",
+        base_url="https://api.example.com",
+        model="claude-x",
+        config=cfg,
+    )
+    route = respx.post("https://api.example.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200, text=_empty_sse(), headers={"content-type": "text/event-stream"}
+        )
+    )
+    await client.stream_step(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+    )
+    body = json.loads(route.calls.last.request.content.decode())
+    assert "system" in body
+    assert "coding assistant" in body["system"]
+    assert "Custom instruction" in body["system"]
+
+
+@respx.mock
+async def test_stream_step_system_prompt_without_config() -> None:
+    """LLMClient without config still gets a default system prompt."""
+    client = LLMClient(
+        api_key="sk-test",
+        base_url="https://api.example.com",
+        model="claude-x",
+    )
+    route = respx.post("https://api.example.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200, text=_empty_sse(), headers={"content-type": "text/event-stream"}
+        )
+    )
+    await client.stream_step(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+    )
+    body = json.loads(route.calls.last.request.content.decode())
+    assert "system" in body
+    assert "read_file" in body["system"]

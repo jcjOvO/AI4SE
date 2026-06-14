@@ -118,10 +118,18 @@ class _RetriableError(Exception):
 
 
 class LLMClient:
-    def __init__(self, api_key: str, base_url: str, model: str, timeout: float = 60.0):
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
+        timeout: float = 60.0,
+        config: Any = None,
+    ):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self._config = config
         self._client = httpx.AsyncClient(
             timeout=timeout,
             headers={
@@ -177,6 +185,7 @@ class LLMClient:
         body: dict[str, Any] = {
             "model": self.model,
             "max_tokens": 8192,
+            "system": _build_system_prompt(self._config),
             "messages": messages,
             "stream": True,
         }
