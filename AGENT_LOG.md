@@ -39,6 +39,7 @@
 | 25 | 2026-06-13 | Phase 6 TUI 美化 | `superpowers:brainstorming` + `superpowers:writing-plans` + `superpowers:subagent-driven-development` | 全面美化 TUI：Catppuccin Mocha 暗色主题 + 面板式消息 + token 用量显示 + spinner 状态栏；6 tasks，subagent-driven；55 tests passed |
 | 26 | 2026-06-13 | Phase 6 Bug 修复 | `superpowers:systematic-debugging` | 修复 tool_use 缺少 tool_result 导致 API 报错的问题；根因：工具执行异常时 assistant 消息已添加但 tool_result 未添加；修复：延迟添加 assistant 消息直到所有工具结果收集完毕；57 tests passed |
 | 27 | 2026-06-13 | Phase 6 Bug 修复 | `superpowers:systematic-debugging` | 修复空 content 消息导致 API 报错 "all messages must have non-empty content"；根因：LLM 返回空 text 且无 tool_calls 时，assistant 消息 content 为空列表；修复：确保 content 永远非空；57 tests passed |
+| 28 | 2026-06-13 | Phase 6 System Prompt | `superpowers:brainstorming` + `superpowers:writing-plans` + `superpowers:subagent-driven-development` | 为 agent 添加结构化 system prompt：工具说明动态注入 + 安全约束 + 回复风格 + config.toml 自定义追加；4 tasks TDD；64 tests passed |
 
 ---
 
@@ -843,4 +844,29 @@
   - **Anthropic API 的消息格式要求**——所有消息必须有非空 content。这是 API 协议层面的硬约束，不能违反。
   - **防御性编程的重要性**——即使 LLM 返回异常响应（空 text、无 tool_calls），代码也要能优雅处理，而不是让 API 报错。
   - **系统化调试流程有效**——按照 Phase 1→2→3→4 的流程，快速定位并修复问题。这次的问题比 #26 更简单，但同样需要遵循调试流程。
+
+---
+
+## #28 — 2026-06-13 — Phase 6：添加结构化 System Prompt
+
+- **任务**：为 agent 添加结构化 system prompt，包含工具使用说明、安全边界约束、回复风格，并支持 config.toml 追加自定义内容。
+- **触发的 Superpowers 技能**：`superpowers:brainstorming`（4 轮澄清：核心目标 → 内容管理 → 内容范围 → 组合方式）+ `superpowers:writing-plans`（5 task 计划）+ `superpowers:subagent-driven-development`（subagent 逐 task 实现 + spec review）。
+- **关键 prompt / context**：
+  - 用户原始请求："给系统添加一个system prompt"
+  - 4 轮澄清后确定：硬编码默认 + config 可追加 / 工具说明 + 安全约束 + 回复风格 / 简单拼接
+  - 设计文档：`docs/superpowers/specs/2026-06-13-system-prompt-design.md`
+  - 实现计划：`docs/superpowers/plans/2026-06-13-system-prompt.md`（4 tasks + 1 验证）
+- **subagent 输出摘要**：
+  - **Task 1**（config.py）：`AgentConfig` 添加 `system_prompt: str = ""` 字段 + 2 个测试 → commit `eed2f16`
+  - **Task 2**（llm.py）：重写 `_build_system_prompt(config)` — 动态工具说明 + 安全约束 + 回复风格 + 自定义追加 + 6 个测试 → commit `2ecb4a0`
+  - **Task 3**（llm.py）：`LLMClient.__init__` 添加 `config` 参数 + `_stream_step_once` 注入 system prompt 到 API 请求 body + 2 个测试 → commit `8875e36`
+  - **Task 4**（__main__.py）：`LLMClient` 创建时传入 `config=config.agent` → commit `af9f0d5`
+  - **Task 5**：最终验证 — 64 tests passed + ruff clean + mypy clean
+- **人工干预**：无（全流程自动化）。
+- **最终验证**：64 tests passed · ruff 0 error · mypy 0 error
+- **学到的教训**：
+  - **System prompt 应该包含工具说明**——LLM 不知道有哪些工具可用时，会倾向于用自然语言描述操作而不是调用工具。动态注入 `tools.all_schemas()` 的名称和描述，让 LLM 知道"我有这些工具，应该用它们"。
+  - **安全约束是 system prompt 的必要部分**——限制文件操作在 /workspace 内、禁止危险命令，这些约束放在 system prompt 比放在代码里更灵活（LLM 会理解意图并主动遵守）。
+  - **Config 追加用简单拼接即可**——不需要模板引擎，`---` 分隔线 + 用户自定义文本就足够。YAGNI 原则。
+  - **`_build_system_prompt()` 的懒导入是避免循环依赖的关键**——`from miniagent.tools import tools` 放在函数体内，因为 `tools.py` 和 `llm.py` 之间没有循环依赖（`llm.py` 不被 `tools.py` 导入），但懒导入更安全且符合项目惯例。
 
